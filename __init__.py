@@ -1,12 +1,18 @@
+import collections
 import cui
+import select
 import socket
 import threading
+import errno
+
+from xml.etree import ElementTree as et
 
 from pydevds import constants
+from pydevds import payload
 
-ST_SESSIONS = ['pydevds', 'sessions']
-ST_PORT =     ['pydevds', 'port']
-
+ST_HOST =           ['pydevds', 'host']
+ST_PORT =           ['pydevds', 'port']
+ST_SERVER =         ['pydevds', 'debugger']
 
 class Command(object):
     def __init__(self, command, sequence_no, payload):
@@ -30,7 +36,8 @@ class Command(object):
 
 
 class ResponseReader(object):
-    def __init__(self, session):
+    def __init__(self, core, session):
+        self.core = core
         self.session = session
         self.read_buffer = ''
 
@@ -42,13 +49,13 @@ class ResponseReader(object):
             if len(r) == 0:
                 print 'Debugger ended connection'
                 if len(self.read_buffer) > 0:
-                    self.session.debugger.logger.log('Received incomplete message: %s' % self.read_buffer)
+                    self.core.logger.log('Received incomplete message: %s' % self.read_buffer)
                 return None
 
             self.read_buffer += r
             while self.read_buffer.find('\n') != -1:
                 response, self.read_buffer = self.read_buffer.split('\n', 1)
-                self.session.debugger.logger.log('\nReceived response: \n  %s\n\n' % (response,))
+                self.core.logger.log('Received response: \n%s' % (response,))
                 responses.append(Command.from_string(response))
         except socket.error, e:
             if e.args[0] not in [errno.EAGAIN, errno.EWOULDBLOCK]:
@@ -57,30 +64,9 @@ class ResponseReader(object):
         return responses
 
 
-class ResponseReaderThread(threading.Thread):
-    def __init__(self, session):
-        super(ResponseReaderThread, self).__init__()
-        self.session = session
-        self.response_reader = ResponseReader(session)
-        self.is_running = False
-
-    def run(self):
-        try:
-            self.is_running = True
-            while True:
-                responses = self.response_reader.read_responses()
-                if responses is None:
-                    return
-                for response in responses:
-                    self.session.dispatch(response)
-        except Exception, e:
-            self.session.debugger.logger.log('ResponseReader: %s' % e.message)
-        finally:
-            self.is_running = False
-
-
 class CommandSender():
-    def __init__(self, session):
+    def __init__(self, core, session):
+        self.core = core
         self.session = session
         self.sequence_no = 1
 
@@ -103,10 +89,10 @@ class D_Thread(object):
             self._update_frames(thread_info.frames)
 
     def _update_frames(self, frame_infos):
-        self.frames.clear()
+        self.frames = []
         for frame_info in frame_infos:
             self.frames.append(D_Frame(frame_info.id,
-                                       frame_info.file_,
+                                       frame_info.file,
                                        frame_info.name,
                                        frame_info.line))
 
@@ -124,17 +110,21 @@ class D_Frame(object):
 
 
 class Session(object):
-    def __init__(self, socket, address):
+    def __init__(self, core, socket):
         self.socket = socket
-        self.address = address
-        self.response_reader_thread = ResponseReaderThread(self)
-        self.command_sender = CommandSender(self)
-        self.threads = {}
-
-    def start(self):
-        self.response_reader_thread.start()
+        self.address = socket.getsockname()
+        self.response_reader = ResponseReader(core, self)
+        self.command_sender = CommandSender(core, self)
         self.command_sender.send(constants.CMD_LIST_THREADS)
         self.command_sender.send(constants.CMD_RUN)
+        self.threads = {}
+
+    def process_responses(self):
+        responses = self.response_reader.read_responses()
+        if responses is None:
+            return
+        for response in responses:
+            self.dispatch(response)
 
     def dispatch(self, response):
         if response.command == constants.CMD_RETURN:
@@ -152,39 +142,124 @@ class Session(object):
                 self.threads[item.id].update(item)
 
     def __str__(self):
-        return '%s' % (self.address,)
+        return self.key()
+
+    def key(self):
+        return '%s:%s' % self.address
+
+    @staticmethod
+    def key_from_socket(socket):
+        return '%s:%s' % socket.getsockname()
 
 
-class DebugServer(threading.Thread):
+
+
+thread_state_str = {
+    constants.THREAD_STATE_INITIAL:   'INI',
+    constants.THREAD_STATE_SUSPENDED: 'SUS',
+    constants.THREAD_STATE_RUNNING:   'RUN'
+}
+
+
+class ThreadBuffer(cui.buffers.ListBuffer):
+    __keymap__ = {
+        'C-s': lambda b: b.suspend_thread()
+    }
+
+    @classmethod
+    def name(cls, session):
+        return 'Threads(%s:%s)' % session.address
+
+    def __init__(self, core, session):
+        super(ThreadBuffer, self).__init__(core, session)
+        self.session = session
+        self.selected_thread = 0
+
+    def suspend_thread(self):
+        self.session.command_sender.send()
+
+    def item_count(self):
+        return len(self.session.threads)
+
+    def render_item(self, index):
+        thread = self.session.threads.values()[index]
+        return '%s %s' % (thread_state_str[thread.state], thread.name)
+
+
+class SessionBuffer(cui.buffers.ListBuffer):
+    @classmethod
+    def name(cls):
+        return "Sessions"
+
+    def on_item_selected(self):
+        selected_session = self.core.state(ST_SERVER).clients.values()[self.selected_item]
+        self.core.switch_buffer(ThreadBuffer, selected_session)
+
+    def item_count(self):
+        return len(self.core.state(ST_SERVER).clients.values())
+
+    def render_item(self, index):
+        return self.core.state(ST_SERVER).clients.values()[index].__str__()
+
+
+class DebugServer(object):
     def __init__(self, core):
+        super(DebugServer, self).__init__()
         self.core = core
+        self.host = self.core.state(ST_HOST)
         self.port = self.core.state(ST_PORT)
+        self.server = None
+        self.clients = collections.OrderedDict()
+        self._init_server()
 
-    def run():
-        hostname = socket.gethostname()
-        server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server.bind((host, port))
-        server.listen(5)
-        self.core.logger.log('Listening on %s:%s' % (host, port))
-        while 1:
-            sock, addr = server.accept()
-            try:
-                self.core.logger.log('Connection received from %s' % (addr,))
-                session = Session(s, address)
-                self.core.state(ST_SESSIONS).append(session)
-                session.start()
+    def _init_server(self):
+        self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.server.bind((self.host, self.port))
+        self.server.listen(5)
+        self.core.logger.log('Listening on %s:%s' % (self.host, self.port))
 
-            except socket.error, e:
-                self.core.logger.log('Received socket error: %s' % e.message)
-            except Exception, e:
-                self.core.logger.log(traceback.format_exc())
-            finally:
-                s.close()
-                self.core.state(ST_SESSIONS).remove(session)
+    def _accept_client(self):
+        client_socket, client_address = self.server.accept()
+        session = Session(self.core, client_socket)
+        key = session.key()
+        self.core.logger.log('Connection received from %s' % key)
+        self.clients[key] = session
+
+    def process_sockets(self):
+        sock_list = []
+        if self.server:
+            sock_list.append(self.server)
+        sock_list.extend(map(lambda session: session.socket,
+                             self.clients.values()))
+
+        sock_read, _, _ = select.select(sock_list, [], [], 0)
+
+        for s in sock_read:
+            if s is self.server:
+                self._accept_client()
+            else:
+                session = self.clients[Session.key_from_socket(s)]
+                try:
+                    session.process_responses()
+                except socket.error, e:
+                    key = session.key()
+                    self.core.logger.log('Connection from %s terminated' % key)
+                    s.close()
+                    del self.clients[key]
+
+
+@cui.update_func
+def handle_sockets(core):
+    core.state(ST_SERVER).process_sockets()
 
 
 @cui.init_func
 def init_pydevds(core):
-    core.set_state(ST_PORT,     4040)
-    core.set_state(ST_SESSIONS, [])
-    core.logger.log('Hallo Welt')
+    core.set_state(ST_HOST, 'localhost')
+    core.set_state(ST_PORT, 4040)
+    core.set_state(ST_SERVER, DebugServer(core))
+    core.switch_buffer(SessionBuffer)
+
+    #for i in range(0, 523):
+    #    core.logger.log(str(i))

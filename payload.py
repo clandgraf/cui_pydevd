@@ -46,7 +46,7 @@ def parse_object(payload):
     elif payload.tag == 'thread':
         return ThreadInfo.from_payload(payload)
     elif payload.tag == 'frame':
-        FrameInfo.from_payload(payload)
+        return FrameInfo.from_payload(payload)
 
 
 def parse_thread_suspend(payload):
