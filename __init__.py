@@ -47,7 +47,7 @@ class ResponseReader(object):
             r = self.session.socket.recv(4096)
 
             if len(r) == 0:
-                print 'Debugger ended connection'
+                self.core.logger.log('Debugger ended connection')
                 if len(self.read_buffer) > 0:
                     self.core.logger.log('Received incomplete message: %s' % self.read_buffer)
                 return None
@@ -57,7 +57,7 @@ class ResponseReader(object):
                 response, self.read_buffer = self.read_buffer.split('\n', 1)
                 self.core.logger.log('Received response: \n%s' % (response,))
                 responses.append(Command.from_string(response))
-        except socket.error, e:
+        except socket.error as e:
             if e.args[0] not in [errno.EAGAIN, errno.EWOULDBLOCK]:
                 raise e
 
@@ -242,7 +242,7 @@ class DebugServer(object):
                 session = self.clients[Session.key_from_socket(s)]
                 try:
                     session.process_responses()
-                except socket.error, e:
+                except socket.error as e:
                     key = session.key()
                     self.core.logger.log('Connection from %s terminated' % key)
                     s.close()
@@ -260,6 +260,3 @@ def init_pydevds(core):
     core.set_state(ST_PORT, 4040)
     core.set_state(ST_SERVER, DebugServer(core))
     core.switch_buffer(SessionBuffer)
-
-    #for i in range(0, 523):
-    #    core.logger.log(str(i))
