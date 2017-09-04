@@ -36,8 +36,7 @@ class Command(object):
 
 
 class ResponseReader(object):
-    def __init__(self, core, session):
-        self.core = core
+    def __init__(self, session):
         self.session = session
         self.read_buffer = ''
 
@@ -47,15 +46,15 @@ class ResponseReader(object):
             r = self.session.socket.recv(4096)
 
             if len(r) == 0:
-                self.core.logger.log('Debugger ended connection')
+                cui.message('Debugger ended connection')
                 if len(self.read_buffer) > 0:
-                    self.core.logger.log('Received incomplete message: %s' % self.read_buffer)
+                    cui.message('Received incomplete message: %s' % self.read_buffer)
                 return None
 
             self.read_buffer += r
             while self.read_buffer.find('\n') != -1:
                 response, self.read_buffer = self.read_buffer.split('\n', 1)
-                self.core.logger.log('Received response: \n%s' % (response,))
+                cui.message('Received response: \n%s' % (response,))
                 responses.append(Command.from_string(response))
         except socket.error as e:
             if e.args[0] not in [errno.EAGAIN, errno.EWOULDBLOCK]:
@@ -65,8 +64,7 @@ class ResponseReader(object):
 
 
 class CommandSender():
-    def __init__(self, core, session):
-        self.core = core
+    def __init__(self, session):
         self.session = session
         self.sequence_no = 1
 
@@ -110,11 +108,11 @@ class D_Frame(object):
 
 
 class Session(object):
-    def __init__(self, core, socket):
+    def __init__(self, socket):
         self.socket = socket
         self.address = socket.getsockname()
-        self.response_reader = ResponseReader(core, self)
-        self.command_sender = CommandSender(core, self)
+        self.response_reader = ResponseReader(self)
+        self.command_sender = CommandSender(self)
         self.command_sender.send(constants.CMD_LIST_THREADS)
         self.command_sender.send(constants.CMD_RUN)
         self.threads = {}
@@ -170,8 +168,8 @@ class ThreadBuffer(cui.buffers.ListBuffer):
     def name(cls, session):
         return 'Threads(%s:%s)' % session.address
 
-    def __init__(self, core, session):
-        super(ThreadBuffer, self).__init__(core, session)
+    def __init__(self, session):
+        super(ThreadBuffer, self).__init__(session)
         self.session = session
         self.selected_thread = 0
 
@@ -192,22 +190,21 @@ class SessionBuffer(cui.buffers.ListBuffer):
         return "Sessions"
 
     def on_item_selected(self):
-        selected_session = self.core.state(ST_SERVER).clients.values()[self.selected_item]
-        self.core.switch_buffer(ThreadBuffer, selected_session)
+        selected_session = cui.get_variable(ST_SERVER).clients.values()[self.selected_item]
+        cui.switch_buffer(ThreadBuffer, selected_session)
 
     def item_count(self):
-        return len(self.core.state(ST_SERVER).clients.values())
+        return len(cui.get_variable(ST_SERVER).clients.values())
 
     def render_item(self, index):
-        return self.core.state(ST_SERVER).clients.values()[index].__str__()
+        return cui.get_variable(ST_SERVER).clients.values()[index].__str__()
 
 
 class DebugServer(object):
-    def __init__(self, core):
+    def __init__(self):
         super(DebugServer, self).__init__()
-        self.core = core
-        self.host = self.core.state(ST_HOST)
-        self.port = self.core.state(ST_PORT)
+        self.host = cui.get_variable(ST_HOST)
+        self.port = cui.get_variable(ST_PORT)
         self.server = None
         self.clients = collections.OrderedDict()
         self._init_server()
@@ -217,13 +214,13 @@ class DebugServer(object):
         self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.server.bind((self.host, self.port))
         self.server.listen(5)
-        self.core.logger.log('Listening on %s:%s' % (self.host, self.port))
+        cui.message('Listening on %s:%s' % (self.host, self.port))
 
     def _accept_client(self):
         client_socket, client_address = self.server.accept()
-        session = Session(self.core, client_socket)
+        session = Session(client_socket)
         key = session.key()
-        self.core.logger.log('Connection received from %s' % key)
+        cui.message('Connection received from %s' % key)
         self.clients[key] = session
 
     def process_sockets(self):
@@ -244,19 +241,19 @@ class DebugServer(object):
                     session.process_responses()
                 except socket.error as e:
                     key = session.key()
-                    self.core.logger.log('Connection from %s terminated' % key)
+                    cui.message('Connection from %s terminated' % key)
                     s.close()
                     del self.clients[key]
 
 
 @cui.update_func
-def handle_sockets(core):
-    core.state(ST_SERVER).process_sockets()
+def handle_sockets():
+    cui.get_variable(ST_SERVER).process_sockets()
 
 
 @cui.init_func
-def init_pydevds(core):
-    core.set_state(ST_HOST, 'localhost')
-    core.set_state(ST_PORT, 4040)
-    core.set_state(ST_SERVER, DebugServer(core))
-    core.switch_buffer(SessionBuffer)
+def init_pydevds():
+    cui.def_variable(ST_HOST, 'localhost')
+    cui.def_variable(ST_PORT, 4040)
+    cui.def_variable(ST_SERVER, DebugServer())
+    cui.switch_buffer(SessionBuffer)
