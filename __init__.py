@@ -166,7 +166,7 @@ class ThreadBuffer(cui.buffers.ListBuffer):
 
     @classmethod
     def name(cls, session):
-        return 'Threads(%s:%s)' % session.address
+        return 'pydevd Threads(%s:%s)' % session.address
 
     def __init__(self, session):
         super(ThreadBuffer, self).__init__(session)
@@ -187,7 +187,7 @@ class ThreadBuffer(cui.buffers.ListBuffer):
 class SessionBuffer(cui.buffers.ListBuffer):
     @classmethod
     def name(cls):
-        return "Sessions"
+        return "pydevd Sessions"
 
     def on_item_selected(self):
         selected_session = cui.get_variable(ST_SERVER).clients.values()[self.selected_item]
