@@ -1,3 +1,7 @@
+# TODO throw away classes use dicts
+
+from urllib.parse import unquote
+from xml.etree import ElementTree as et
 
 from . import constants
 
@@ -25,6 +29,11 @@ class ThreadSuspend(object):
         return ThreadSuspend(payload.attrib['id'],
                              [parse_object(child) for child in payload.iter('frame')])
 
+class ThreadResume(object):
+    def __init__(self, the_id, reason):
+        self.id = the_id
+        self.reason = reason
+
 class FrameInfo(object):
     def __init__(self, the_id, the_file, name, line):
         self.id = the_id
@@ -35,7 +44,7 @@ class FrameInfo(object):
     @staticmethod
     def from_payload(payload):
         return FrameInfo(payload.attrib['id'],
-                         payload.attrib['file'],
+                         unquote(unquote(payload.attrib['file'])),
                          payload.attrib['name'],
                          payload.attrib['line'])
 
@@ -49,12 +58,24 @@ def parse_object(payload):
         return FrameInfo.from_payload(payload)
 
 
+def parse_return(payload):
+    return parse_object(et.fromstring(payload))
+
+
+def parse_thread_resume(payload):
+    the_id, reason = payload.split('\t', 1)
+    return ThreadResume(the_id, reason)
+
+
 def parse_thread_suspend(payload):
-    return [ThreadSuspend.from_payload(child) for child in payload.iter('thread')]
+    return [ThreadSuspend.from_payload(child)
+            for child in et.fromstring(payload).iter('thread')]
+
 
 payload_factory_map = {
     constants.CMD_THREAD_SUSPEND: parse_thread_suspend,
-    constants.CMD_RETURN: parse_object
+    constants.CMD_THREAD_RESUME: parse_thread_resume,
+    constants.CMD_RETURN: parse_return
 }
 
 def create_payload(command_id, payload):

@@ -5,8 +5,6 @@ import socket
 import threading
 import errno
 
-from xml.etree import ElementTree as et
-
 from pydevds import constants
 from pydevds import payload
 
@@ -31,8 +29,7 @@ class Command(object):
     @staticmethod
     def from_string(s):
         command, sequence_no, payload_raw = s.split('\t', 2)
-        pl = None if payload_raw == '' else et.fromstring(payload_raw)
-        return Command(int(command), int(sequence_no), payload.create_payload(int(command), pl))
+        return Command(int(command), int(sequence_no), payload.create_payload(int(command), payload_raw))
 
 
 class ResponseReader(object):
@@ -51,7 +48,7 @@ class ResponseReader(object):
                     cui.message('Received incomplete message: %s' % self.read_buffer)
                 return None
 
-            self.read_buffer += r
+            self.read_buffer += r.decode('utf-8')
             while self.read_buffer.find('\n') != -1:
                 response, self.read_buffer = self.read_buffer.split('\n', 1)
                 cui.message('Received response: \n%s' % (response,))
@@ -63,62 +60,77 @@ class ResponseReader(object):
         return responses
 
 
-class CommandSender():
-    def __init__(self, session):
-        self.session = session
-        self.sequence_no = 1
-
-    def send(self, command, argument=''):
-        self.session.socket.send('%s\t%s\t%s\n' %
-                                 (command, self.sequence_no, argument))
-        self.sequence_no += 2
-
-
 class D_Thread(object):
-    def __init__(self, the_id, name, state=constants.THREAD_STATE_INITIAL):
+    def __init__(self, session, the_id, name, state=constants.THREAD_STATE_INITIAL):
+        self.session = session
         self.id = the_id
         self.name = name
         self.state = state
         self.frames = []
 
+    def step_into(self):
+        self.session.send_command(constants.CMD_STEP_INTO, self.id)
+
+    def step_over(self):
+        self.session.send_command(constants.CMD_STEP_OVER, self.id)
+
+    def step_return(self):
+        self.session.send_command(constants.CMD_STEP_RETURN, self.id)
+
+    def resume(self):
+        self.session.send_command(constants.CMD_THREAD_RESUME, self.id)
+
     def update(self, thread_info):
         if isinstance(thread_info, payload.ThreadSuspend):
             self.state = constants.THREAD_STATE_SUSPENDED
             self._update_frames(thread_info.frames)
+        elif isinstance(thread_info, payload.ThreadResume):
+            self.state = constants.THREAD_STATE_RUNNING
+            self.frames = []
 
     def _update_frames(self, frame_infos):
         self.frames = []
         for frame_info in frame_infos:
-            self.frames.append(D_Frame(frame_info.id,
+            self.frames.append(D_Frame(self,
+                                       frame_info.id,
                                        frame_info.file,
                                        frame_info.name,
                                        frame_info.line))
 
     @staticmethod
-    def from_thread_info(thread_info):
-        return D_Thread(thread_info.id, thread_info.name)
+    def from_thread_info(session, thread_info):
+        return D_Thread(session, thread_info.id, thread_info.name)
 
 
 class D_Frame(object):
-    def __init__(self, id_, file_, name, line):
+    def __init__(self, thread, id_, file_, name, line):
+        self.thread = thread
         self.id = id_
         self.file = file_
         self.name = name
         self.line = line
 
+    def get_info():
+        self.session.send_command(constants.CMD_GET_FRAME,
+                                  '%s\t%s\t%s' % (self.thread.id, self.id, ''))
 
 class Session(object):
     def __init__(self, socket):
         self.socket = socket
         self.address = socket.getsockname()
-        self.response_reader = ResponseReader(self)
-        self.command_sender = CommandSender(self)
-        self.command_sender.send(constants.CMD_LIST_THREADS)
-        self.command_sender.send(constants.CMD_RUN)
         self.threads = {}
+        self._response_reader = ResponseReader(self)
+        self._sequence_no = 1
+        self.send_command(constants.CMD_LIST_THREADS)
+        self.send_command(constants.CMD_RUN)
+
+    def send_command(self, command, argument=''):
+        self.socket.send(('%s\t%s\t%s\n'
+                          % (command, self._sequence_no, argument)).encode('utf-8'))
+        self._sequence_no += 2
 
     def process_responses(self):
-        responses = self.response_reader.read_responses()
+        responses = self._response_reader.read_responses()
         if responses is None:
             return
         for response in responses:
@@ -131,13 +143,15 @@ class Session(object):
                     if item.id in self.threads:
                         self.threads[item.id].update(item)
                     else:
-                        self.threads[item.id] = D_Thread.from_thread_info(item)
+                        self.threads[item.id] = D_Thread.from_thread_info(self, item)
                 elif isinstance(item, payload.ThreadSuspend):
                     self.threads[item.id].update(item)
         elif response.command == constants.CMD_THREAD_SUSPEND:
             item = response.payload[0]
             if isinstance(item, payload.ThreadSuspend):
                 self.threads[item.id].update(item)
+        elif response.command == constants.CMD_THREAD_RESUME:
+            self.threads[response.payload.id].update(response.payload)
 
     def __str__(self):
         return self.key()
@@ -150,18 +164,37 @@ class Session(object):
         return '%s:%s' % socket.getsockname()
 
 
-
-
 thread_state_str = {
     constants.THREAD_STATE_INITIAL:   'INI',
     constants.THREAD_STATE_SUSPENDED: 'SUS',
     constants.THREAD_STATE_RUNNING:   'RUN'
 }
 
+thread_state_col = {
+    constants.THREAD_STATE_INITIAL:   'default',
+    constants.THREAD_STATE_SUSPENDED: 'error',
+    constants.THREAD_STATE_RUNNING:   'info'
+}
 
-class ThreadBuffer(cui.buffers.ListBuffer):
+def with_thread(fn):
+    def _fn(*args, **kwargs):
+        return fn(cui.current_buffer().selected_thread(),
+                  *args,
+                  **kwargs)
+    return _fn
+
+def with_frame(fn):
+    def _fn(*args, **kwargs):
+        frame = cui.current_buffer().selected_frame()
+        if frame:
+            return fn(frame.thread, frame, *args, **kwargs)
+
+class ThreadBuffer(cui.buffers.TreeBuffer):
     __keymap__ = {
-        'C-s': lambda b: b.suspend_thread()
+        '<f5>': with_thread(lambda thr: thr.step_into()),
+        '<f6>': with_thread(lambda thr: thr.step_over()),
+        '<f7>': with_thread(lambda thr: thr.step_return()),
+        '<f8>': with_thread(lambda thr: thr.resume())
     }
 
     @classmethod
@@ -171,17 +204,34 @@ class ThreadBuffer(cui.buffers.ListBuffer):
     def __init__(self, session):
         super(ThreadBuffer, self).__init__(session)
         self.session = session
-        self.selected_thread = 0
 
-    def suspend_thread(self):
-        self.session.command_sender.send()
+    def selected_thread(self):
+        item = self.selected_item()
+        if isinstance(item, D_Thread):
+            return item
+        elif isinstance(item, D_Frame):
+            return item.thread
 
-    def item_count(self):
-        return len(self.session.threads)
+    def selected_frame(self):
+        item = self.selected_item()
+        return item if isinstance(item, D_Frame) else None
 
-    def render_item(self, index):
-        thread = self.session.threads.values()[index]
-        return '%s %s' % (thread_state_str[thread.state], thread.name)
+    def get_roots(self):
+        return self.session.threads.values()
+
+    def get_children(self, item):
+        if isinstance(item, D_Thread):
+            return item.frames
+        return []
+
+    def render_node(self, window, item, depth, width):
+        if isinstance(item, D_Thread):
+            return [[{'content':    '%s' % thread_state_str[item.state],
+                      'foreground': thread_state_col[item.state]},
+                     ' %s' % item.name]]
+        elif isinstance(item, D_Frame):
+            return [cui.buffers.pad_left(width,
+                                         '%s:%s' % (item.file, item.line))]
 
 
 class SessionBuffer(cui.buffers.ListBuffer):
@@ -190,14 +240,16 @@ class SessionBuffer(cui.buffers.ListBuffer):
         return "pydevd Sessions"
 
     def on_item_selected(self):
-        selected_session = cui.get_variable(ST_SERVER).clients.values()[self.selected_item]
-        cui.switch_buffer(ThreadBuffer, selected_session)
+        cui.switch_buffer(ThreadBuffer, self.selected_item())
 
-    def item_count(self):
-        return len(cui.get_variable(ST_SERVER).clients.values())
+    def prepare(self):
+        self._flattened = list(cui.get_variable(ST_SERVER).clients.values())
 
-    def render_item(self, index):
-        return cui.get_variable(ST_SERVER).clients.values()[index].__str__()
+    def items(self):
+        return self._flattened
+
+    def render_item(self, window, item):
+        return [str(item)]
 
 
 class DebugServer(object):
