@@ -164,6 +164,23 @@ class Session(object):
         return '%s:%s' % socket.getsockname()
 
 
+class CodeBuffer(cui.buffers.ListBuffer):
+    @classmethod
+    def name(cls, session):
+        return 'Code (%s:%s)' % session.address
+
+    def __init__(self, session):
+        super(CodeBuffer, self).__init__(session)
+        self._session = session
+        self._rows = []
+
+    def set_file(self, f):
+        pass
+
+    def items(self):
+        return self._rows
+
+
 thread_state_str = {
     constants.THREAD_STATE_INITIAL:   'INI',
     constants.THREAD_STATE_SUSPENDED: 'SUS',
@@ -188,6 +205,7 @@ def with_frame(fn):
         frame = cui.current_buffer().selected_frame()
         if frame:
             return fn(frame.thread, frame, *args, **kwargs)
+
 
 class ThreadBuffer(cui.buffers.TreeBuffer):
     __keymap__ = {
@@ -215,6 +233,11 @@ class ThreadBuffer(cui.buffers.TreeBuffer):
     def selected_frame(self):
         item = self.selected_item()
         return item if isinstance(item, D_Frame) else None
+
+    def on_item_selected(self):
+        frame = self.selected_frame()
+        if frame:
+            cui.buffer_visible(CodeBuffer, self.session)
 
     def get_roots(self):
         return self.session.threads.values()
