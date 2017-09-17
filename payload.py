@@ -46,7 +46,7 @@ class FrameInfo(object):
         return FrameInfo(payload.attrib['id'],
                          unquote(unquote(payload.attrib['file'])),
                          payload.attrib['name'],
-                         payload.attrib['line'])
+                         int(payload.attrib['line']))
 
 
 def parse_object(payload):

@@ -28,3 +28,13 @@ def get_rows(file_path):
             else:
                 row.append(tcontent)
     yield row
+
+
+class SourceManager(object):
+    def __init__(self):
+        self._sources = {}
+
+    def get_file(self, file_path):
+        if file_path not in self._sources:
+            self._sources[file_path] = list(get_rows(file_path))
+        return self._sources[file_path]

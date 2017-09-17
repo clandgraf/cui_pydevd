@@ -7,10 +7,12 @@ import errno
 
 from pydevds import constants
 from pydevds import payload
+from pydevds import highlighter
 
 ST_HOST =           ['pydevds', 'host']
 ST_PORT =           ['pydevds', 'port']
 ST_SERVER =         ['pydevds', 'debugger']
+ST_SOURCES =        ['pydevds', 'sources']
 
 class Command(object):
     def __init__(self, command, sequence_no, payload):
@@ -96,6 +98,7 @@ class D_Thread(object):
                                        frame_info.file,
                                        frame_info.name,
                                        frame_info.line))
+            # TODO update CodeBuffer if session/thread has one
 
     @staticmethod
     def from_thread_info(session, thread_info):
@@ -173,12 +176,25 @@ class CodeBuffer(cui.buffers.ListBuffer):
         super(CodeBuffer, self).__init__(session)
         self._session = session
         self._rows = []
+        self._line = 0
 
-    def set_file(self, f):
-        pass
+    def set_file(self, file_path, line):
+        src_mgr = cui.get_variable(ST_SOURCES)
+        self._rows = src_mgr.get_file(file_path)
+        self.set_variable(['win/buf', 'selected-item'], line)
+        self._line = line
+        self.recenter()
 
     def items(self):
         return self._rows
+
+    def render_item(self, window, item, index):
+        if index + 1 == self._line:
+            return [{'content': item,
+                     'foreground': 'special',
+                     'background': 'special'}]
+        else:
+            return [item]
 
 
 thread_state_str = {
@@ -237,7 +253,8 @@ class ThreadBuffer(cui.buffers.TreeBuffer):
     def on_item_selected(self):
         frame = self.selected_frame()
         if frame:
-            cui.buffer_visible(CodeBuffer, self.session)
+            _, buffer_object = cui.buffer_visible(CodeBuffer, self.session)
+            buffer_object.set_file(frame.file, frame.line)
 
     def get_roots(self):
         return self.session.threads.values()
@@ -271,7 +288,7 @@ class SessionBuffer(cui.buffers.ListBuffer):
     def items(self):
         return self._flattened
 
-    def render_item(self, window, item):
+    def render_item(self, window, item, index):
         return [str(item)]
 
 
@@ -328,7 +345,9 @@ def handle_sockets():
 
 @cui.init_func
 def init_pydevds():
+    cui.def_foreground('keyword', 'red')
     cui.def_variable(ST_HOST, 'localhost')
     cui.def_variable(ST_PORT, 4040)
     cui.def_variable(ST_SERVER, DebugServer())
+    cui.def_variable(ST_SOURCES, highlighter.SourceManager())
     cui.switch_buffer(SessionBuffer)
