@@ -1,4 +1,6 @@
 
+from cui.util import intersperse
+
 from pygments import lex
 from pygments.lexers import Python3Lexer
 from pygments.token import Token
@@ -16,17 +18,28 @@ def read_code(file_path):
 def get_rows(file_path):
     row = []
     for ttype, tcontent in lex(read_code(file_path), Python3Lexer()):
-        if ttype is Token.Text and tcontent == '\n':
-            yield row
-            row = []
-        else:
-            tstyle = token_map.get(ttype)
-            if tstyle:
-                token = tstyle.copy()
-                token['content'] = tcontent
-                row.append(token)
+        # Handle multiline tokens
+        splitted_content = intersperse(
+            [(Token.Literal.String.Doc, tcontent)
+             for tcontent in tcontent.split('\n')] \
+            if ttype is Token.Literal.String.Doc else \
+            [(ttype, tcontent)],
+            (Token.Text, '\n')
+        )
+
+        # Yield tokens
+        for ttype, tcontent in splitted_content:
+            if ttype is Token.Text and tcontent == '\n':
+                yield row
+                row = []
             else:
-                row.append(tcontent)
+                tstyle = token_map.get(ttype)
+                if tstyle:
+                    token = tstyle.copy()
+                    token['content'] = tcontent
+                    row.append(token)
+                else:
+                    row.append(tcontent)
     yield row
 
 

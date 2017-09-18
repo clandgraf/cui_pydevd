@@ -98,7 +98,13 @@ class D_Thread(object):
                                        frame_info.file,
                                        frame_info.name,
                                        frame_info.line))
-            # TODO update CodeBuffer if session/thread has one
+        self.display_frame(self.frames[0])
+
+    def display_frame(self, frame):
+        # Display line in
+        window, buffer_object = cui.buffer_visible(CodeBuffer, self.session, self)
+        with cui.window_selected(window):
+            buffer_object.set_file(frame.file, frame.line)
 
     @staticmethod
     def from_thread_info(session, thread_info):
@@ -167,34 +173,69 @@ class Session(object):
         return '%s:%s' % socket.getsockname()
 
 
-class CodeBuffer(cui.buffers.ListBuffer):
-    @classmethod
-    def name(cls, session):
-        return 'Code (%s:%s)' % session.address
+def with_thread(fn):
+    def _fn(*args, **kwargs):
+        return fn(cui.current_buffer().thread,
+                  *args,
+                  **kwargs)
+    return _fn
 
-    def __init__(self, session):
-        super(CodeBuffer, self).__init__(session)
+def with_frame(fn):
+    def _fn(*args, **kwargs):
+        frame = cui.current_buffer().selected_frame()
+        if frame:
+            return fn(frame.thread, frame, *args, **kwargs)
+
+
+class CodeBuffer(cui.buffers.ListBuffer):
+    __keymap__ = {
+        '<f5>': with_thread(lambda thr: thr.step_into()),
+        '<f6>': with_thread(lambda thr: thr.step_over()),
+        '<f7>': with_thread(lambda thr: thr.step_return()),
+        '<f8>': with_thread(lambda thr: thr.resume()),
+        'C-b':  lambda: cui.current_buffer().center_break()
+    }
+
+    @classmethod
+    def name(cls, session, thread):
+        return ('Code (%s:%s/%s)'
+                % (session.address[0], session.address[1], thread.id))
+
+    def __init__(self, session, thread):
+        super(CodeBuffer, self).__init__(session, thread)
         self._session = session
+        self._thread = thread
         self._rows = []
         self._line = 0
+
+    @property
+    def thread(self):
+        return self._thread
+
+    def center_break(self):
+        self.set_variable(['win/buf', 'selected-item'], self._line - 1)
+        self.recenter()
 
     def set_file(self, file_path, line):
         src_mgr = cui.get_variable(ST_SOURCES)
         self._rows = src_mgr.get_file(file_path)
-        self.set_variable(['win/buf', 'selected-item'], line)
         self._line = line
-        self.recenter()
+        self.center_break()
 
     def items(self):
         return self._rows
 
+    def hide_selection(self):
+        return self._line == self.get_variable(['win/buf', 'selected-item']) + 1
+
     def render_item(self, window, item, index):
+        indexed_item = ['%%%dd' % len(str(len(self._rows))) % (index + 1), ' ', item]
         if index + 1 == self._line:
-            return [{'content': item,
+            return [{'content': indexed_item,
                      'foreground': 'special',
                      'background': 'special'}]
         else:
-            return [item]
+            return [indexed_item]
 
 
 thread_state_str = {
@@ -208,20 +249,6 @@ thread_state_col = {
     constants.THREAD_STATE_SUSPENDED: 'error',
     constants.THREAD_STATE_RUNNING:   'info'
 }
-
-def with_thread(fn):
-    def _fn(*args, **kwargs):
-        return fn(cui.current_buffer().selected_thread(),
-                  *args,
-                  **kwargs)
-    return _fn
-
-def with_frame(fn):
-    def _fn(*args, **kwargs):
-        frame = cui.current_buffer().selected_frame()
-        if frame:
-            return fn(frame.thread, frame, *args, **kwargs)
-
 
 class ThreadBuffer(cui.buffers.TreeBuffer):
     __keymap__ = {
@@ -239,6 +266,10 @@ class ThreadBuffer(cui.buffers.TreeBuffer):
         super(ThreadBuffer, self).__init__(session)
         self.session = session
 
+    @property
+    def thread(self):
+        return self.selected_thread()
+
     def selected_thread(self):
         item = self.selected_item()
         if isinstance(item, D_Thread):
@@ -251,10 +282,10 @@ class ThreadBuffer(cui.buffers.TreeBuffer):
         return item if isinstance(item, D_Frame) else None
 
     def on_item_selected(self):
+        thread = self.selected_thread()
         frame = self.selected_frame()
         if frame:
-            _, buffer_object = cui.buffer_visible(CodeBuffer, self.session)
-            buffer_object.set_file(frame.file, frame.line)
+            self.thread.display_frame(frame)
 
     def get_roots(self):
         return self.session.threads.values()
