@@ -5,6 +5,8 @@ from pygments import lex
 from pygments.lexers import Python3Lexer
 from pygments.token import Token
 
+# TODO fix escaped linebreaks
+
 token_map = {
     Token.Comment.Hashbang:        {'foreground': 'comment'},
     Token.Comment.Single:          {'foreground': 'comment'},
@@ -36,7 +38,7 @@ def get_rows(file_path):
 
         # Yield tokens
         for ttype, tcontent in splitted_content:
-            if ttype is Token.Text and tcontent == '\n':
+            if ttype is Token.Text and tcontent in ['\n', '\\\n']:
                 yield row
                 row = []
             else:
@@ -61,6 +63,8 @@ class SourceManager(object):
 
 
 if __name__ == '__main__':
-    for item in lex(open('C:\\src\\cs\\cdb\\trunk\cdb\\python\\cdb\\scripts\\cdbsrv.py', 'r').read(),
+    f = 'C:\\src\\cs\\cdb\\trunk\cdb\\python\\cdb\\scripts\\cdbsrv.py'
+    f = 'test.py'
+    for item in lex(open(f, 'r').read(),
                     Python3Lexer()):
         print(item)
