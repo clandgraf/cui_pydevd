@@ -101,7 +101,6 @@ class D_Thread(object):
         self.display_frame(self.frames[0])
 
     def display_frame(self, frame):
-        # Display line in
         window, buffer_object = cui.buffer_visible(CodeBuffer, self.session, self)
         with cui.window_selected(window):
             buffer_object.set_file(frame.file, frame.line)
@@ -127,7 +126,7 @@ class Session(object):
     def __init__(self, socket):
         self.socket = socket
         self.address = socket.getsockname()
-        self.threads = {}
+        self.threads = collections.OrderedDict()
         self._response_reader = ResponseReader(self)
         self._sequence_no = 1
         self.send_command(constants.CMD_LIST_THREADS)
@@ -376,9 +375,15 @@ def handle_sockets():
 
 @cui.init_func
 def init_pydevds():
-    cui.def_foreground('keyword', 'red')
+    cui.def_foreground('comment', 'dark_grey')
+    cui.def_foreground('keyword', 'magenta')
+    cui.def_foreground('string', 'green')
+    cui.def_foreground('string_escape', 'dark_grey')
+    cui.def_foreground('string_interpol', 'dark_grey')
+
     cui.def_variable(ST_HOST, 'localhost')
     cui.def_variable(ST_PORT, 4040)
     cui.def_variable(ST_SERVER, DebugServer())
     cui.def_variable(ST_SOURCES, highlighter.SourceManager())
+
     cui.switch_buffer(SessionBuffer)

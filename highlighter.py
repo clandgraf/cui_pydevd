@@ -6,7 +6,14 @@ from pygments.lexers import Python3Lexer
 from pygments.token import Token
 
 token_map = {
-    Token.Keyword: {'foreground': 'keyword'}
+    Token.Comment.Hashbang:        {'foreground': 'comment'},
+    Token.Comment.Single:          {'foreground': 'comment'},
+    Token.Keyword:                 {'foreground': 'keyword'},
+    Token.Keyword.Namespace:       {'foreground': 'keyword'},
+    Token.Literal.String.Double:   {'foreground': 'string'},
+    Token.Literal.String.Doc:      {'foreground': 'string'},
+    Token.Literal.String.Escape:   {'foreground': 'string_escape'},
+    Token.Literal.String.Interpol: {'foreground': 'string_interpol'}
 }
 
 
@@ -51,3 +58,9 @@ class SourceManager(object):
         if file_path not in self._sources:
             self._sources[file_path] = list(get_rows(file_path))
         return self._sources[file_path]
+
+
+if __name__ == '__main__':
+    for item in lex(open('C:\\src\\cs\\cdb\\trunk\cdb\\python\\cdb\\scripts\\cdbsrv.py', 'r').read(),
+                    Python3Lexer()):
+        print(item)
