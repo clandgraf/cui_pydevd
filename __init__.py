@@ -14,169 +14,18 @@ ST_PORT =           ['pydevds', 'port']
 ST_SERVER =         ['pydevds', 'debugger']
 ST_SOURCES =        ['pydevds', 'sources']
 
-class Command(object):
-    def __init__(self, command, sequence_no, payload):
-        self.command = command
-        self.sequence_no = sequence_no
-        self.payload = payload
-
-    def __str__(self):
-        command_string = constants.cmd_labels.get(self.command, 'Unknown Command')
-        string = command_string + '\n'
-        if self.payload:
-            for obj in self.payload:
-                string += '\t%s' % obj + '\n'
-        return string
-
-    @staticmethod
-    def from_string(s):
-        command, sequence_no, payload_raw = s.split('\t', 2)
-        return Command(int(command), int(sequence_no), payload.create_payload(int(command), payload_raw))
 
 
-class ResponseReader(object):
-    def __init__(self, session):
-        self.session = session
-        self.read_buffer = ''
-
-    def read_responses(self):
-        responses = []
-        try:
-            r = self.session.socket.recv(4096)
-
-            if len(r) == 0:
-                cui.message('Debugger ended connection')
-                if len(self.read_buffer) > 0:
-                    cui.message('Received incomplete message: %s' % self.read_buffer)
-                return None
-
-            self.read_buffer += r.decode('utf-8')
-            while self.read_buffer.find('\n') != -1:
-                response, self.read_buffer = self.read_buffer.split('\n', 1)
-                cui.message('Received response: \n%s' % (response,))
-                responses.append(Command.from_string(response))
-        except socket.error as e:
-            if e.args[0] not in [errno.EAGAIN, errno.EWOULDBLOCK]:
-                raise e
-
-        return responses
-
-
-class D_Thread(object):
-    def __init__(self, session, the_id, name, state=constants.THREAD_STATE_INITIAL):
-        self.session = session
-        self.id = the_id
-        self.name = name
-        self.state = state
-        self.frames = []
-
-    def step_into(self):
-        self.session.send_command(constants.CMD_STEP_INTO, self.id)
-
-    def step_over(self):
-        self.session.send_command(constants.CMD_STEP_OVER, self.id)
-
-    def step_return(self):
-        self.session.send_command(constants.CMD_STEP_RETURN, self.id)
-
-    def resume(self):
-        self.session.send_command(constants.CMD_THREAD_RESUME, self.id)
-
-    def update(self, thread_info):
-        if isinstance(thread_info, payload.ThreadSuspend):
-            self.state = constants.THREAD_STATE_SUSPENDED
-            self._update_frames(thread_info.frames)
-        elif isinstance(thread_info, payload.ThreadResume):
-            self.state = constants.THREAD_STATE_RUNNING
-            self.frames = []
-
-    def _update_frames(self, frame_infos):
-        self.frames = []
-        for frame_info in frame_infos:
-            self.frames.append(D_Frame(self,
-                                       frame_info.id,
-                                       frame_info.file,
-                                       frame_info.name,
-                                       frame_info.line))
-        self.display_frame(self.frames[0])
-
-    def display_frame(self, frame):
-        window, buffer_object = cui.buffer_visible(CodeBuffer, self.session, self)
-        with cui.window_selected(window):
-            buffer_object.set_file(frame.file, frame.line)
-
-    @staticmethod
-    def from_thread_info(session, thread_info):
-        return D_Thread(session, thread_info.id, thread_info.name)
-
-
-class D_Frame(object):
-    def __init__(self, thread, id_, file_, name, line):
-        self.thread = thread
-        self.id = id_
-        self.file = file_
-        self.name = name
-        self.line = line
-
-    def get_info():
-        self.session.send_command(constants.CMD_GET_FRAME,
-                                  '%s\t%s\t%s' % (self.thread.id, self.id, ''))
-
-class Session(object):
-    def __init__(self, socket):
-        self.socket = socket
-        self.address = socket.getsockname()
-        self.threads = collections.OrderedDict()
-        self._response_reader = ResponseReader(self)
-        self._sequence_no = 1
-        self.send_command(constants.CMD_LIST_THREADS)
-        self.send_command(constants.CMD_RUN)
-
-    def send_command(self, command, argument=''):
-        self.socket.send(('%s\t%s\t%s\n'
-                          % (command, self._sequence_no, argument)).encode('utf-8'))
-        self._sequence_no += 2
-
-    def process_responses(self):
-        responses = self._response_reader.read_responses()
-        if responses is None:
-            return
-        for response in responses:
-            self.dispatch(response)
-
-    def dispatch(self, response):
-        if response.command == constants.CMD_RETURN:
-            for item in response.payload:
-                if isinstance(item, payload.ThreadInfo):
-                    if item.id in self.threads:
-                        self.threads[item.id].update(item)
-                    else:
-                        self.threads[item.id] = D_Thread.from_thread_info(self, item)
-                elif isinstance(item, payload.ThreadSuspend):
-                    self.threads[item.id].update(item)
-        elif response.command == constants.CMD_THREAD_SUSPEND:
-            item = response.payload[0]
-            if isinstance(item, payload.ThreadSuspend):
-                self.threads[item.id].update(item)
-        elif response.command == constants.CMD_THREAD_RESUME:
-            self.threads[response.payload.id].update(response.payload)
-
-    def __str__(self):
-        return self.key()
-
-    def key(self):
-        return '%s:%s' % self.address
-
-    @staticmethod
-    def key_from_socket(socket):
-        return '%s:%s' % socket.getsockname()
+# ---------------------------- Buffers ----------------------------
 
 
 def with_thread(fn):
     def _fn(*args, **kwargs):
-        return fn(cui.current_buffer().thread,
-                  *args,
-                  **kwargs)
+        thread = cui.current_buffer().thread
+        if thread.state == constants.THREAD_STATE_SUSPENDED:
+            return fn(thread, *args, **kwargs)
+        else:
+            cui.message('Thread %s must be suspended.' % thread.name)
     return _fn
 
 def with_frame(fn):
@@ -184,6 +33,29 @@ def with_frame(fn):
         frame = cui.current_buffer().selected_frame()
         if frame:
             return fn(frame.thread, frame, *args, **kwargs)
+
+
+class FrameBuffer(cui.buffers.ListBuffer):
+    @classmethod
+    def name(cls, session, thread):
+        return ('Frame (%s:%s/%s)'
+                % (session.address[0], session.address[1], thread.id))
+
+    def __init__(self, session, thread):
+        super(FrameBuffer, self).__init__(session, thread)
+        self._rows = []
+
+    def set_frame(self, frame):
+        self._rows = []
+        if frame.variables:
+            for variable in frame.variables:
+                cui.message(str(variable))
+                self._rows.append('%s(%s): %s' % (variable['name'],
+                                                  variable['vtype'],
+                                                  variable['value']))
+
+    def items(self):
+        return self._rows
 
 
 class CodeBuffer(cui.buffers.ListBuffer):
@@ -322,6 +194,177 @@ class SessionBuffer(cui.buffers.ListBuffer):
         return [str(item)]
 
 
+# -----------------------------------------------------------------------
+
+
+class Command(object):
+    def __init__(self, command, sequence_no, payload):
+        self.command = command
+        self.sequence_no = sequence_no
+        self.payload = payload
+
+    @staticmethod
+    def from_string(s):
+        command, sequence_no, payload_raw = s.split('\t', 2)
+        return Command(int(command), int(sequence_no), payload.create_payload(int(command), payload_raw))
+
+
+class ResponseReader(object):
+    def __init__(self, session):
+        self.session = session
+        self.read_buffer = ''
+
+    def read_responses(self):
+        responses = []
+        try:
+            r = self.session.socket.recv(4096)
+
+            if len(r) == 0:
+                cui.message('Debugger ended connection')
+                if len(self.read_buffer) > 0:
+                    cui.message('Received incomplete message: %s' % self.read_buffer)
+                return None
+
+            self.read_buffer += r.decode('utf-8')
+            while self.read_buffer.find('\n') != -1:
+                response, self.read_buffer = self.read_buffer.split('\n', 1)
+                cui.message('Received response: \n%s' % (response,))
+                responses.append(Command.from_string(response))
+        except socket.error as e:
+            if e.args[0] not in [errno.EAGAIN, errno.EWOULDBLOCK]:
+                raise e
+
+        return responses
+
+
+class D_Thread(object):
+    def __init__(self, session, the_id, name, state=constants.THREAD_STATE_INITIAL):
+        self.session = session
+        self.id = the_id
+        self.name = name
+        self.state = state
+        self.frames = []
+
+    def step_into(self):
+        self.session.send_command(constants.CMD_STEP_INTO, self.id)
+
+    def step_over(self):
+        self.session.send_command(constants.CMD_STEP_OVER, self.id)
+
+    def step_return(self):
+        self.session.send_command(constants.CMD_STEP_RETURN, self.id)
+
+    def resume(self):
+        self.session.send_command(constants.CMD_THREAD_RESUME, self.id)
+
+    def update(self, thread_info):
+        if thread_info['type'] == 'thread_suspend':
+            self.state = constants.THREAD_STATE_SUSPENDED
+            self._update_frames(thread_info['frames'])
+        elif thread_info['type'] == 'thread_resume':
+            self.state = constants.THREAD_STATE_RUNNING
+            self.frames = []
+
+    def _update_frames(self, frame_infos):
+        self.frames = []
+        for frame_info in frame_infos:
+            self.frames.append(D_Frame(self,
+                                       frame_info['id'],
+                                       frame_info['file'],
+                                       frame_info['name'],
+                                       frame_info['line']))
+        self.display_frame(self.frames[0])
+
+    def update_frame(self, sequence_no, variables):
+        for frame in self.frames:
+            if frame.pending == sequence_no:
+                frame.variables = variables
+                frame.pending = None
+                buffer_object = cui.get_buffer(FrameBuffer, self.session, self)
+                if buffer_object:
+                    buffer_object.set_frame(frame)
+
+    def display_frame(self, frame):
+        if frame.variables is None and frame.pending is None:
+            frame.pending = self.session.send_command(constants.CMD_GET_FRAME,
+                                                      '%s\t%s\t%s' % (self.id, frame.id, ''))
+
+        window, buffer_object = cui.buffer_visible(CodeBuffer, self.session, self)
+        with cui.window_selected(window):
+            buffer_object.set_file(frame.file, frame.line)
+        window, buffer_object = cui.buffer_visible(FrameBuffer, self.session, self,
+                                                   split_method=cui.split_window_right)
+        with cui.window_selected(window):
+            buffer_object.set_frame(frame)
+
+    @staticmethod
+    def from_thread_info(session, thread_info):
+        return D_Thread(session, thread_info['id'], thread_info['name'])
+
+
+class D_Frame(object):
+    def __init__(self, thread, id_, file_, name, line):
+        self.thread = thread
+        self.id = id_
+        self.file = file_
+        self.name = name
+        self.line = line
+        self.variables = None
+        self.pending = None
+
+class Session(object):
+    def __init__(self, socket):
+        self.socket = socket
+        self.address = socket.getsockname()
+        self.threads = collections.OrderedDict()
+        self._response_reader = ResponseReader(self)
+        self._sequence_no = 1
+        self.send_command(constants.CMD_LIST_THREADS)
+        self.send_command(constants.CMD_RUN)
+
+    def send_command(self, command, argument=''):
+        sequence_no = self._sequence_no
+        self.socket.send(('%s\t%s\t%s\n'
+                          % (command, sequence_no, argument)).encode('utf-8'))
+        self._sequence_no += 2
+        return sequence_no
+
+    def process_responses(self):
+        responses = self._response_reader.read_responses()
+        if responses is None:
+            return
+        for response in responses:
+            self._dispatch(response)
+
+    def _dispatch(self, response):
+        if response.command == constants.CMD_RETURN:
+            for item in response.payload:
+                if item['type'] == 'thread_info':
+                    if item['id'] in self.threads:
+                        self.threads[item['id']].update(item)
+                    else:
+                        self.threads[item['id']] = D_Thread.from_thread_info(self, item)
+        elif response.command == constants.CMD_THREAD_SUSPEND:
+            for item in response.payload:
+                if item['type'] == 'thread_suspend':
+                    self.threads[item['id']].update(item)
+        elif response.command == constants.CMD_THREAD_RESUME:
+            self.threads[response.payload['id']].update(response.payload)
+        elif response.command == constants.CMD_GET_FRAME:
+            for thread in self.threads.values():
+                thread.update_frame(response.sequence_no, response.payload)
+
+    def __str__(self):
+        return self.key()
+
+    def key(self):
+        return '%s:%s' % self.address
+
+    @staticmethod
+    def key_from_socket(socket):
+        return '%s:%s' % socket.getsockname()
+
+
 class DebugServer(object):
     def __init__(self):
         super(DebugServer, self).__init__()
@@ -377,6 +420,7 @@ def handle_sockets():
 def init_pydevds():
     cui.def_foreground('comment', 'dark_grey')
     cui.def_foreground('keyword', 'magenta')
+    cui.def_foreground('function', 'cyan')
     cui.def_foreground('string', 'green')
     cui.def_foreground('string_escape', 'dark_grey')
     cui.def_foreground('string_interpol', 'dark_grey')

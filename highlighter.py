@@ -12,6 +12,8 @@ token_map = {
     Token.Comment.Single:          {'foreground': 'comment'},
     Token.Keyword:                 {'foreground': 'keyword'},
     Token.Keyword.Namespace:       {'foreground': 'keyword'},
+    Token.Name.Builtin.Pseudo:     {'foreground': 'keyword'},
+    Token.Name.Function:           {'foreground': 'function'},
     Token.Literal.String.Double:   {'foreground': 'string'},
     Token.Literal.String.Doc:      {'foreground': 'string'},
     Token.Literal.String.Escape:   {'foreground': 'string_escape'},
@@ -38,7 +40,7 @@ def get_rows(file_path):
 
         # Yield tokens
         for ttype, tcontent in splitted_content:
-            if ttype is Token.Text and tcontent in ['\n', '\\\n']:
+            if tcontent in ['\n', '\\\n']:
                 yield row
                 row = []
             else:
@@ -65,6 +67,7 @@ class SourceManager(object):
 if __name__ == '__main__':
     f = 'C:\\src\\cs\\cdb\\trunk\cdb\\python\\cdb\\scripts\\cdbsrv.py'
     f = 'test.py'
+    f = 'C:\\src\\cs\\cdb\\trunk\cdb\\python\\cdb\\rte.py'
     for item in lex(open(f, 'r').read(),
                     Python3Lexer()):
         print(item)

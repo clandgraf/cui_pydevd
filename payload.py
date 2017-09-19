@@ -1,80 +1,46 @@
-# TODO throw away classes use dicts
-
 from urllib.parse import unquote
 from xml.etree import ElementTree as et
 
 from . import constants
 
-class ThreadInfo(object):
-    def __init__(self, the_id, name):
-        self.id = the_id
-        self.name = name
-
-    def __str__(self):
-        return '%s: %s' % (self.id, self.name)
-
-    @staticmethod
-    def from_payload(payload):
-        ti = ThreadInfo(payload.attrib['id'],
-                        payload.attrib['name'])
-        return ti
-
-class ThreadSuspend(object):
-    def __init__(self, the_id, frames):
-        self.id = the_id
-        self.frames = frames
-
-    @staticmethod
-    def from_payload(payload):
-        return ThreadSuspend(payload.attrib['id'],
-                             [parse_object(child) for child in payload.iter('frame')])
-
-class ThreadResume(object):
-    def __init__(self, the_id, reason):
-        self.id = the_id
-        self.reason = reason
-
-class FrameInfo(object):
-    def __init__(self, the_id, the_file, name, line):
-        self.id = the_id
-        self.file = the_file
-        self.name = name
-        self.line = line
-
-    @staticmethod
-    def from_payload(payload):
-        return FrameInfo(payload.attrib['id'],
-                         unquote(unquote(payload.attrib['file'])),
-                         payload.attrib['name'],
-                         int(payload.attrib['line']))
-
-
 def parse_object(payload):
     if payload.tag == 'xml':
         return [parse_object(child) for child in payload]
     elif payload.tag == 'thread':
-        return ThreadInfo.from_payload(payload)
+        return {'type': 'thread_info',
+                'id':   payload.attrib['id'],
+                'name': payload.attrib['name']}
     elif payload.tag == 'frame':
-        return FrameInfo.from_payload(payload)
-
+        return {'type': 'frame',
+                'id':   payload.attrib['id'],
+                'file': unquote(unquote(payload.attrib['file'])),
+                'name': payload.attrib['name'],
+                'line': int(payload.attrib['line'])}
+    elif payload.tag == 'var':
+        return {'type':  'variable',
+                'name':  payload.attrib['name'],
+                'vtype': payload.attrib['type'],
+                'value': unquote(unquote(payload.attrib['value']))}
 
 def parse_return(payload):
     return parse_object(et.fromstring(payload))
 
+def parse_thread_suspend(payload):
+    return [{'type':   'thread_suspend',
+             'id':     thread.attrib['id'],
+             'frames': [parse_object(frame) for frame in thread.iter('frame')]}
+            for thread in et.fromstring(payload).iter('thread')]
 
 def parse_thread_resume(payload):
     the_id, reason = payload.split('\t', 1)
-    return ThreadResume(the_id, reason)
-
-
-def parse_thread_suspend(payload):
-    return [ThreadSuspend.from_payload(child)
-            for child in et.fromstring(payload).iter('thread')]
-
+    return {'type':   'thread_resume',
+            'id':     the_id,
+            'reason': reason}
 
 payload_factory_map = {
     constants.CMD_THREAD_SUSPEND: parse_thread_suspend,
     constants.CMD_THREAD_RESUME: parse_thread_resume,
+    constants.CMD_GET_FRAME: parse_return,
     constants.CMD_RETURN: parse_return
 }
 
