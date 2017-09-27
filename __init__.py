@@ -19,6 +19,10 @@ ST_SOURCES =        ['pydevds', 'sources']
 # ---------------------------- Buffers ----------------------------
 
 
+class EvalBuffer(cui.buffers.ConsoleBuffer):
+    pass
+
+
 def with_thread(fn):
     def _fn(*args, **kwargs):
         thread = cui.current_buffer().thread
@@ -50,9 +54,9 @@ class FrameBuffer(cui.buffers.ListBuffer):
         if frame.variables:
             for variable in frame.variables:
                 cui.message(str(variable))
-                self._rows.append('%s(%s): %s' % (variable['name'],
-                                                  variable['vtype'],
-                                                  variable['value']))
+                self._rows.append('%s = {%s} %s' % (variable['name'],
+                                                    variable['vtype'],
+                                                    variable['value']))
 
     def items(self):
         return self._rows
@@ -418,11 +422,11 @@ def handle_sockets():
 
 @cui.init_func
 def init_pydevds():
-    cui.def_foreground('comment', 'dark_grey')
-    cui.def_foreground('keyword', 'magenta')
-    cui.def_foreground('function', 'cyan')
-    cui.def_foreground('string', 'green')
-    cui.def_foreground('string_escape', 'dark_grey')
+    cui.def_foreground('comment',         'dark_grey')  # TODO no default color
+    cui.def_foreground('keyword',         'magenta')
+    cui.def_foreground('function',        'cyan')
+    cui.def_foreground('string',          'green')
+    cui.def_foreground('string_escape',   'dark_grey')
     cui.def_foreground('string_interpol', 'dark_grey')
 
     cui.def_variable(ST_HOST, 'localhost')
