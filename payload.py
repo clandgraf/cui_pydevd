@@ -41,7 +41,8 @@ payload_factory_map = {
     constants.CMD_THREAD_SUSPEND: parse_thread_suspend,
     constants.CMD_THREAD_RESUME: parse_thread_resume,
     constants.CMD_GET_FRAME: parse_return,
-    constants.CMD_RETURN: parse_return
+    constants.CMD_RETURN: parse_return,
+    constants.CMD_EVAL_EXPR: parse_return
 }
 
 def create_payload(command_id, payload):
