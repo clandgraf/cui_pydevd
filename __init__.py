@@ -15,6 +15,17 @@ ST_SERVER =         ['pydevds', 'debugger']
 ST_SOURCES =        ['pydevds', 'sources']
 
 
+cui.def_foreground('comment',         'yellow')  # TODO use default color
+cui.def_foreground('keyword',         'magenta')
+cui.def_foreground('function',        'cyan')
+cui.def_foreground('string',          'green')
+cui.def_foreground('string_escape',   'yellow')
+cui.def_foreground('string_interpol', 'yellow')
+
+cui.def_variable(ST_HOST, 'localhost')
+cui.def_variable(ST_PORT, 4040)
+
+
 # ---------------------------- Buffers ----------------------------
 
 
@@ -122,7 +133,7 @@ class CodeBuffer(ThreadBufferMixin, cui.buffers.ListBuffer):
     def render_item(self, window, item, index):
         indexed_item = ['%%%dd' % len(str(len(self._rows))) % (index + 1), ' ', item]
         if index + 1 == self._line:
-            return [{'content': indexed_item,
+            return [{'content':    indexed_item,
                      'foreground': 'special',
                      'background': 'special'}]
         else:
@@ -208,7 +219,7 @@ class SessionBuffer(cui.buffers.ListBuffer):
     def on_item_selected(self):
         cui.switch_buffer(ThreadBuffer, self.selected_item())
 
-    def prepare(self):
+    def on_pre_render(self):
         self._flattened = list(cui.get_variable(ST_SERVER).clients.values())
 
     def items(self):
@@ -319,9 +330,8 @@ class D_Thread(object):
             if frame.pending == sequence_no:
                 frame.variables = variables
                 frame.pending = None
-                buffer_object = cui.get_buffer(FrameBuffer, self.session, self)
-                if buffer_object:
-                    buffer_object.set_frame(frame)
+                cui.exec_if_buffer_exists(lambda b: b.set_frame(frame),
+                                          FrameBuffer, self.session, self)
 
     def display_frame(self, frame):
         if frame.variables is None and frame.pending is None:
@@ -460,16 +470,6 @@ def handle_sockets():
 
 @cui.init_func
 def init_pydevds():
-    cui.def_foreground('comment',         'dark_grey')  # TODO use default color
-    cui.def_foreground('keyword',         'magenta')
-    cui.def_foreground('function',        'cyan')
-    cui.def_foreground('string',          'green')
-    cui.def_foreground('string_escape',   'dark_grey')
-    cui.def_foreground('string_interpol', 'dark_grey')
-
-    cui.def_variable(ST_HOST, 'localhost')
-    cui.def_variable(ST_PORT, 4040)
     cui.def_variable(ST_SERVER, DebugServer())
     cui.def_variable(ST_SOURCES, highlighter.SourceManager())
-
     cui.switch_buffer(SessionBuffer)
