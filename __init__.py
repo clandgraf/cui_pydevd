@@ -1,5 +1,6 @@
 import collections
 import cui
+import functools
 import select
 import socket
 import threading
@@ -70,6 +71,7 @@ def with_thread(fn):
 
 
 def with_frame(fn):
+    @functools.wraps(fn)
     def _fn(*args, **kwargs):
         frame = cui.current_buffer().selected_frame()
         if frame:
@@ -152,14 +154,20 @@ thread_state_col = {
     constants.THREAD_STATE_RUNNING:   'info'
 }
 
+@with_frame
+def py_open_eval(thread, frame):
+    """Open a buffer to evaluate expressions in thread."""
+    cui.exec_in_buffer_visible(lambda b: b.set_frame(frame),
+                               EvalBuffer, thread.session, thread,
+                               to_window=True)
+
 class ThreadBuffer(cui.buffers.TreeBuffer):
     __keymap__ = {
         '<f5>': with_thread(lambda thr: thr.step_into()),
         '<f6>': with_thread(lambda thr: thr.step_over()),
         '<f7>': with_thread(lambda thr: thr.step_return()),
         '<f8>': with_thread(lambda thr: thr.resume()),
-        'C-c':  with_frame(lambda t, f: (cui.buffer_visible(EvalBuffer, t.session, t)[1] \
-                                            .set_frame(f)))
+        'C-c':  py_open_eval
     }
 
     @classmethod
@@ -346,6 +354,10 @@ class D_Thread(object):
         cui.exec_if_buffer_exists(lambda b: b.set_frame(frame),
                                   EvalBuffer, self.session, self)
 
+    def clear_buffers(self):
+        for b in [CodeBuffer, FrameBuffer, EvalBuffer]:
+            cui.kill_buffer(b, self.session, self)
+
     @staticmethod
     def from_thread_info(session, thread_info):
         return D_Thread(session, thread_info['id'], thread_info['name'])
@@ -406,6 +418,10 @@ class Session(object):
             for thread in self.threads.values():
                 thread.on_eval(response.sequence_no, response.payload)
 
+    def clear_threads(self):
+        for thread in self.threads.values():
+            thread.clear_buffers()
+
     def __str__(self):
         return self.key()
 
@@ -457,6 +473,7 @@ class DebugServer(object):
                 try:
                     session.process_responses()
                 except socket.error as e:
+                    session.clear_threads()
                     key = session.key()
                     cui.message('Connection from %s terminated' % key)
                     s.close()
