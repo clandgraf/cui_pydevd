@@ -11,10 +11,15 @@ token_map = {
     Token.Comment.Hashbang:        {'foreground': 'comment'},
     Token.Comment.Single:          {'foreground': 'comment'},
     Token.Keyword:                 {'foreground': 'keyword'},
+    Token.Keyword.Constant:        {'foreground': 'keyword'},
     Token.Keyword.Namespace:       {'foreground': 'keyword'},
     Token.Name.Builtin.Pseudo:     {'foreground': 'keyword'},
+    Token.Name.Builtin.Pseudo:     {'foreground': 'keyword'},
+    Token.Name.Decorator:          {'foreground': 'py_decorator'},
     Token.Name.Function:           {'foreground': 'function'},
+    Token.Name.Function.Magic:     {'foreground': 'function'},
     Token.Literal.String.Double:   {'foreground': 'string'},
+    Token.Literal.String.Single:   {'foreground': 'string'},
     Token.Literal.String.Doc:      {'foreground': 'string'},
     Token.Literal.String.Escape:   {'foreground': 'string_escape'},
     Token.Literal.String.Interpol: {'foreground': 'string_interpol'}
@@ -68,6 +73,11 @@ if __name__ == '__main__':
     f = 'C:\\src\\cs\\cdb\\trunk\cdb\\python\\cdb\\scripts\\cdbsrv.py'
     f = 'test.py'
     f = 'C:\\src\\cs\\cdb\\trunk\cdb\\python\\cdb\\rte.py'
+    f = 'C:\\cygwin\\home\\cla\\pydevds\\cui\\buffers.py'
+    token_types = set()
     for item in lex(open(f, 'r').read(),
                     Python3Lexer()):
+        token_types.add(item[0])
         print(item)
+    for token_type in token_types:
+        print(token_type)
