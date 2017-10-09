@@ -3,6 +3,11 @@ from xml.etree import ElementTree as et
 
 from . import constants
 
+def unescape(string):
+    return unquote(unquote(string).replace('&lt;', '<') \
+                                  .replace('&gt;', '>') \
+                                  .replace('&quot;', '"'))
+
 def parse_object(payload):
     if payload.tag == 'xml':
         return [parse_object(child) for child in payload]
@@ -20,7 +25,8 @@ def parse_object(payload):
         return {'type':  'variable',
                 'name':  payload.attrib['name'],
                 'vtype': payload.attrib['type'],
-                'value': unquote(unquote(payload.attrib['value']))}
+                'value': unescape(payload.attrib['value']),
+                'isContainer': payload.attrib.get('isContainer', 'False') == 'True'}
 
 def parse_return(payload):
     return parse_object(et.fromstring(payload))

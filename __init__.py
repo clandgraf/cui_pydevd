@@ -1,5 +1,6 @@
 import collections
 import cui
+import cui.keymap
 import functools
 import select
 import socket
@@ -29,27 +30,79 @@ cui.def_variable(ST_PORT, 4040)
 
 # ---------------------------- Buffers ----------------------------
 
+def with_thread(fn):
+    @functools.wraps(fn)
+    def _fn(*args, **kwargs):
+        thread = cui.current_buffer().thread
+        if thread.state == constants.THREAD_STATE_SUSPENDED:
+            return fn(thread, *args, **kwargs)
+        else:
+            cui.message('Thread %s must be suspended.' % thread.name)
+    return _fn
 
-class ThreadBufferMixin(object):
+def with_frame(fn):
+    @functools.wraps(fn)
+    def _fn(*args, **kwargs):
+        frame = cui.current_buffer().selected_frame()
+        if frame:
+            return fn(frame.thread, frame, *args, **kwargs)
+    return _fn
+
+@with_thread
+def py_step_into(thread):
+    """Step into next expression in current thread."""
+    thread.step_into()
+
+@with_thread
+def py_step_over(thread):
+    """Step over next expression in current thread."""
+    thread.step_over()
+
+@with_thread
+def py_step_return(thread):
+    """Execute until function returns."""
+    thread.step_return()
+
+@with_thread
+def py_resume(thread):
+    """Continue execution until next breakpoint is hit."""
+    thread.resume()
+
+@with_frame
+def py_open_eval(thread, frame):
+    """Open a buffer to evaluate expressions in thread."""
+    cui.exec_in_buffer_visible(lambda b: b.set_frame(frame),
+                               EvalBuffer, thread,
+                               to_window=True)
+
+class ThreadBufferKeymap(cui.keymap.WithKeymap):
+    __keymap__ = {
+        '<f5>': py_step_into,
+        '<f6>': py_step_over,
+        '<f7>': py_step_return,
+        '<f8>': py_resume
+    }
+
+class ThreadBufferMixin(ThreadBufferKeymap):
     @classmethod
-    def name(cls, session, thread):
+    def name(cls, thread):
         return ('%s (%s:%s/%s)'
                 % (cls.__buffer_name__,
-                   session.address[0],
-                   session.address[1],
+                   thread.session.address[0],
+                   thread.session.address[1],
                    thread.id))
 
     @property
     def thread(self):
         return self._thread
 
-
 class EvalBuffer(ThreadBufferMixin, cui.buffers.ConsoleBuffer):
+    """Evaluate expressions in the current frame."""
+
     __buffer_name__ = 'Eval'
 
-    def __init__(self, session, thread):
-        super(EvalBuffer, self).__init__(session, thread)
-        self._session = session
+    def __init__(self, thread):
+        super(EvalBuffer, self).__init__(thread)
         self._thread = thread
         self._frame = None
 
@@ -60,30 +113,14 @@ class EvalBuffer(ThreadBufferMixin, cui.buffers.ConsoleBuffer):
         self._thread.eval(self._frame, b)
 
 
-def with_thread(fn):
-    def _fn(*args, **kwargs):
-        thread = cui.current_buffer().thread
-        if thread.state == constants.THREAD_STATE_SUSPENDED:
-            return fn(thread, *args, **kwargs)
-        else:
-            cui.message('Thread %s must be suspended.' % thread.name)
-    return _fn
-
-
-def with_frame(fn):
-    @functools.wraps(fn)
-    def _fn(*args, **kwargs):
-        frame = cui.current_buffer().selected_frame()
-        if frame:
-            return fn(frame.thread, frame, *args, **kwargs)
-    return _fn
-
-
 class FrameBuffer(ThreadBufferMixin, cui.buffers.ListBuffer):
+    """Display frame contents."""
+
     __buffer_name__ = 'Frame'
 
-    def __init__(self, session, thread):
-        super(FrameBuffer, self).__init__(session, thread)
+    def __init__(self, thread):
+        super(FrameBuffer, self).__init__(thread)
+        self._thread = thread
         self._rows = []
 
     def set_frame(self, frame):
@@ -100,18 +137,15 @@ class FrameBuffer(ThreadBufferMixin, cui.buffers.ListBuffer):
 
 
 class CodeBuffer(ThreadBufferMixin, cui.buffers.ListBuffer):
+    """Display the source of the file being currently debugged."""
+
     __buffer_name__ = 'Code'
     __keymap__ = {
-        '<f5>': with_thread(lambda thr: thr.step_into()),
-        '<f6>': with_thread(lambda thr: thr.step_over()),
-        '<f7>': with_thread(lambda thr: thr.step_return()),
-        '<f8>': with_thread(lambda thr: thr.resume()),
         'C-b':  lambda: cui.current_buffer().center_break()
     }
 
-    def __init__(self, session, thread):
-        super(CodeBuffer, self).__init__(session, thread)
-        self._session = session
+    def __init__(self, thread):
+        super(CodeBuffer, self).__init__(thread)
         self._thread = thread
         self._rows = []
         self._line = 0
@@ -154,19 +188,10 @@ thread_state_col = {
     constants.THREAD_STATE_RUNNING:   'info'
 }
 
-@with_frame
-def py_open_eval(thread, frame):
-    """Open a buffer to evaluate expressions in thread."""
-    cui.exec_in_buffer_visible(lambda b: b.set_frame(frame),
-                               EvalBuffer, thread.session, thread,
-                               to_window=True)
+class ThreadBuffer(ThreadBufferKeymap, cui.buffers.TreeBuffer):
+    """Display all existing threads in the current session."""
 
-class ThreadBuffer(cui.buffers.TreeBuffer):
     __keymap__ = {
-        '<f5>': with_thread(lambda thr: thr.step_into()),
-        '<f6>': with_thread(lambda thr: thr.step_over()),
-        '<f7>': with_thread(lambda thr: thr.step_return()),
-        '<f8>': with_thread(lambda thr: thr.resume()),
         'C-c':  py_open_eval
     }
 
@@ -220,6 +245,7 @@ class ThreadBuffer(cui.buffers.TreeBuffer):
 
 
 class SessionBuffer(cui.buffers.ListBuffer):
+    """Display a list of active pydevd sessions."""
     @classmethod
     def name(cls):
         return "pydevd Sessions"
@@ -252,10 +278,14 @@ class Command(object):
         return Command(int(command), int(sequence_no), payload.create_payload(int(command), payload_raw))
 
 
+class ConnectionTerminated(Exception):
+    pass
+
+
 class ResponseReader(object):
     def __init__(self, session):
         self.session = session
-        self.read_buffer = ''
+        self._read_buffer = ''
 
     def read_responses(self):
         responses = []
@@ -264,13 +294,14 @@ class ResponseReader(object):
 
             if len(r) == 0:
                 cui.message('Debugger ended connection')
-                if len(self.read_buffer) > 0:
-                    cui.message('Received incomplete message: %s' % self.read_buffer)
-                return None
+                if len(self._read_buffer) > 0:
+                    cui.message('Received incomplete message: %s' % self._read_buffer)
+                # TODO raise exception to finish this session
+                raise ConnectionTerminated('received 0 bytes')
 
-            self.read_buffer += r.decode('utf-8')
-            while self.read_buffer.find('\n') != -1:
-                response, self.read_buffer = self.read_buffer.split('\n', 1)
+            self._read_buffer += r.decode('utf-8')
+            while self._read_buffer.find('\n') != -1:
+                response, self._read_buffer = self._read_buffer.split('\n', 1)
                 cui.message('Received response: \n%s' % (response,))
                 responses.append(Command.from_string(response))
         except socket.error as e:
@@ -331,7 +362,7 @@ class D_Thread(object):
         if sequence_no in self.evals:
             self.evals.remove(sequence_no)
             cui.exec_if_buffer_exists(lambda b: b.extend(*[v['value'] for v in variables]),
-                                      EvalBuffer, self.session, self)
+                                      EvalBuffer, self)
 
     def update_frame(self, sequence_no, variables):
         for frame in self.frames:
@@ -339,7 +370,7 @@ class D_Thread(object):
                 frame.variables = variables
                 frame.pending = None
                 cui.exec_if_buffer_exists(lambda b: b.set_frame(frame),
-                                          FrameBuffer, self.session, self)
+                                          FrameBuffer, self)
 
     def display_frame(self, frame):
         if frame.variables is None and frame.pending is None:
@@ -347,16 +378,17 @@ class D_Thread(object):
                                                       '%s\t%s\t%s' % (self.id, frame.id, ''))
 
         cui.exec_in_buffer_visible(lambda b: b.set_file(frame.file, frame.line),
-                                   CodeBuffer, self.session, self)
+                                   CodeBuffer, self)
         cui.exec_in_buffer_visible(lambda b: b.set_frame(frame),
-                                   FrameBuffer, self.session, self,
+                                   FrameBuffer, self,
                                    split_method=cui.split_window_right)
         cui.exec_if_buffer_exists(lambda b: b.set_frame(frame),
-                                  EvalBuffer, self.session, self)
+                                  EvalBuffer, self)
 
-    def clear_buffers(self):
+    def close_buffers(self):
         for b in [CodeBuffer, FrameBuffer, EvalBuffer]:
-            cui.kill_buffer(b, self.session, self)
+            cui.kill_buffer(b, self)
+        cui.delete_all_windows()
 
     @staticmethod
     def from_thread_info(session, thread_info):
@@ -372,6 +404,7 @@ class D_Frame(object):
         self.line = line
         self.variables = None
         self.pending = None
+
 
 class Session(object):
     def __init__(self, socket):
@@ -418,9 +451,11 @@ class Session(object):
             for thread in self.threads.values():
                 thread.on_eval(response.sequence_no, response.payload)
 
-    def clear_threads(self):
+    def close(self):
+        cui.kill_buffer(ThreadBuffer, session)
         for thread in self.threads.values():
-            thread.clear_buffers()
+            thread.close_buffers()
+        self.socket.close()
 
     def __str__(self):
         return self.key()
@@ -472,12 +507,10 @@ class DebugServer(object):
                 session = self.clients[Session.key_from_socket(s)]
                 try:
                     session.process_responses()
-                except socket.error as e:
-                    session.clear_threads()
-                    key = session.key()
-                    cui.message('Connection from %s terminated' % key)
-                    s.close()
-                    del self.clients[key]
+                except (socket.error, ConnectionTerminated) as e:
+                    cui.message('Connection from %s terminated' % session)
+                    session.close()
+                    del self.clients[session.key()]
 
 
 @cui.update_func
