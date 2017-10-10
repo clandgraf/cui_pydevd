@@ -11,13 +11,12 @@ from pydevds import constants
 from pydevds import payload
 from pydevds import highlighter
 
-ST_HOST =           ['pydevds', 'host']
-ST_PORT =           ['pydevds', 'port']
-ST_SERVER =         ['pydevds', 'debugger']
-ST_SOURCES =        ['pydevds', 'sources']
+ST_HOST =    ['pydevds', 'host']
+ST_PORT =    ['pydevds', 'port']
+ST_SERVER =  ['pydevds', 'debugger']
+ST_SOURCES = ['pydevds', 'sources']
 
-
-cui.def_foreground('comment',         'yellow')  # TODO use default color
+cui.def_foreground('comment',         'yellow')
 cui.def_foreground('keyword',         'magenta')
 cui.def_foreground('function',        'cyan')
 cui.def_foreground('string',          'green')
