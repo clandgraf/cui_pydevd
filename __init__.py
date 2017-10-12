@@ -11,10 +11,15 @@ from pydevds import constants
 from pydevds import payload
 from pydevds import highlighter
 
-ST_HOST =    ['pydevds', 'host']
-ST_PORT =    ['pydevds', 'port']
-ST_SERVER =  ['pydevds', 'debugger']
-ST_SOURCES = ['pydevds', 'sources']
+ST_HOST =            ['pydevds', 'host']
+ST_PORT =            ['pydevds', 'port']
+ST_SERVER =          ['pydevds', 'debugger']
+ST_SOURCES =         ['pydevds', 'sources']
+ST_ON_SET_FRAME =    ['pydevds', 'on-set-frame']
+ST_ON_SUSPEND =      ['pydevds', 'on-suspend']
+ST_ON_RESUME =       ['pydevds', 'on-resume']
+ST_ON_KILL_THREAD =  ['pydevds', 'on-kill-thread']
+ST_ON_KILL_SESSION = ['pydevds', 'on-kill-session']
 
 cui.def_foreground('comment',         'yellow')
 cui.def_foreground('keyword',         'magenta')
@@ -25,6 +30,12 @@ cui.def_foreground('string_interpol', 'yellow')
 
 cui.def_variable(ST_HOST, 'localhost')
 cui.def_variable(ST_PORT, 4040)
+
+cui.def_hook(ST_ON_SET_FRAME)
+cui.def_hook(ST_ON_SUSPEND)
+cui.def_hook(ST_ON_RESUME)
+cui.def_hook(ST_ON_KILL_THREAD)
+cui.def_hook(ST_ON_KILL_SESSION)
 
 
 # ---------------------------- Buffers ----------------------------
@@ -346,6 +357,7 @@ class D_Thread(object):
         elif thread_info['type'] == 'thread_resume':
             self.state = constants.THREAD_STATE_RUNNING
             self.frames = []
+            cui.run_hook(ST_ON_RESUME, self)
 
     def _update_frames(self, frame_infos):
         self.frames = []
@@ -355,7 +367,9 @@ class D_Thread(object):
                                        frame_info['file'],
                                        frame_info['name'],
                                        frame_info['line']))
-        self.display_frame(self.frames[0])
+        frame = self.frames[0]
+        cui.run_hook(ST_ON_SUSPEND, self, frame.file, frame.line)
+        self.display_frame(frame)
 
     def on_eval(self, sequence_no, variables):
         if sequence_no in self.evals:
@@ -383,11 +397,13 @@ class D_Thread(object):
                                    split_method=cui.split_window_right)
         cui.exec_if_buffer_exists(lambda b: b.set_frame(frame),
                                   EvalBuffer, self)
+        cui.run_hook(ST_ON_SET_FRAME, self, frame.file, frame.line)
 
-    def close_buffers(self):
+    def close(self):
         for b in [CodeBuffer, FrameBuffer, EvalBuffer]:
             cui.kill_buffer(b, self)
         cui.delete_all_windows()
+        cui.run_hook(ST_ON_KILL_THREAD, self)
 
     @staticmethod
     def from_thread_info(session, thread_info):
@@ -451,9 +467,10 @@ class Session(object):
                 thread.on_eval(response.sequence_no, response.payload)
 
     def close(self):
-        cui.kill_buffer(ThreadBuffer, session)
         for thread in self.threads.values():
-            thread.close_buffers()
+            thread.close()
+        cui.kill_buffer(ThreadBuffer, session)
+        cui.run_hook(ST_ON_KILL_SESSION)
         self.socket.close()
 
     def __str__(self):
