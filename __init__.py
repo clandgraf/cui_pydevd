@@ -473,7 +473,7 @@ class Session(object):
     def close(self):
         for thread in self.threads.values():
             thread.close()
-        cui.kill_buffer(ThreadBuffer, session)
+        cui.kill_buffer(ThreadBuffer, self)
         cui.run_hook(ST_ON_KILL_SESSION)
         self.socket.close()
 
@@ -529,8 +529,10 @@ class DebugServer(object):
                     session.process_responses()
                 except (socket.error, ConnectionTerminated) as e:
                     cui.message('Connection from %s terminated' % session)
-                    session.close()
-                    del self.clients[session.key()]
+                    try:
+                        session.close()
+                    finally:
+                        del self.clients[session.key()]
 
 
 @cui.update_func
