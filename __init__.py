@@ -25,7 +25,7 @@ ST_ON_SUSPEND =      ['pydevds', 'on-suspend']
 ST_ON_RESUME =       ['pydevds', 'on-resume']
 ST_ON_KILL_THREAD =  ['pydevds', 'on-kill-thread']
 ST_ON_KILL_SESSION = ['pydevds', 'on-kill-session']
-ST_DEBUG_LOG =       ['pydevds', 'debug_log']
+ST_DEBUG_LOG =       ['logging', 'pydevds-comm']
 
 cui.def_foreground('comment',         'yellow')
 cui.def_foreground('keyword',         'magenta')
