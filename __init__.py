@@ -6,10 +6,11 @@ import collections
 import cui
 import cui.keymap
 import functools
-import select
 import socket
 import threading
 import errno
+
+from cui.tools import server
 
 from pydevds import constants
 from pydevds import payload
@@ -24,6 +25,7 @@ ST_ON_SUSPEND =      ['pydevds', 'on-suspend']
 ST_ON_RESUME =       ['pydevds', 'on-resume']
 ST_ON_KILL_THREAD =  ['pydevds', 'on-kill-thread']
 ST_ON_KILL_SESSION = ['pydevds', 'on-kill-session']
+ST_DEBUG_LOG =       ['pydevds', 'debug_log']
 
 cui.def_foreground('comment',         'yellow')
 cui.def_foreground('keyword',         'magenta')
@@ -32,8 +34,11 @@ cui.def_foreground('string',          'green')
 cui.def_foreground('string_escape',   'yellow')
 cui.def_foreground('string_interpol', 'yellow')
 
-cui.def_variable(ST_HOST, 'localhost')
-cui.def_variable(ST_PORT, 4040)
+cui.def_variable(ST_HOST,      'localhost')
+cui.def_variable(ST_PORT,      4040)
+cui.def_variable(ST_SERVER,    None)
+cui.def_variable(ST_SOURCES,   None)
+cui.def_variable(ST_DEBUG_LOG, False)
 
 cui.def_hook(ST_ON_SET_FRAME)
 cui.def_hook(ST_ON_SUSPEND)
@@ -141,7 +146,6 @@ class FrameBuffer(ThreadBufferMixin, cui.buffers.ListBuffer):
         self._rows = []
         if frame.variables:
             for variable in frame.variables:
-                cui.message(str(variable))
                 self._rows.append('%s = {%s} %s' % (variable['name'],
                                                     variable['vtype'],
                                                     variable['value']))
@@ -292,10 +296,6 @@ class Command(object):
         return Command(int(command), int(sequence_no), payload.create_payload(int(command), payload_raw))
 
 
-class ConnectionTerminated(Exception):
-    pass
-
-
 class ResponseReader(object):
     def __init__(self, session):
         self.session = session
@@ -311,12 +311,13 @@ class ResponseReader(object):
                 if len(self._read_buffer) > 0:
                     cui.message('Received incomplete message: %s' % self._read_buffer)
                 # TODO raise exception to finish this session
-                raise ConnectionTerminated('received 0 bytes')
+                raise server.ConnectionTerminated('received 0 bytes')
 
             self._read_buffer += r.decode('utf-8')
             while self._read_buffer.find('\n') != -1:
                 response, self._read_buffer = self._read_buffer.split('\n', 1)
-                cui.message('Received response: \n%s' % (response,))
+                if cui.get_variable(ST_DEBUG_LOG):
+                    cui.message('Received response: \n%s' % (response,))
                 responses.append(Command.from_string(response))
         except socket.error as e:
             if e.args[0] not in [errno.EAGAIN, errno.EWOULDBLOCK]:
@@ -425,10 +426,9 @@ class D_Frame(object):
         self.pending = None
 
 
-class Session(object):
+class Session(server.Session):
     def __init__(self, socket):
-        self.socket = socket
-        self.address = socket.getsockname()
+        super(Session, self).__init__(socket)
         self.threads = collections.OrderedDict()
         self._response_reader = ResponseReader(self)
         self._sequence_no = 1
@@ -442,7 +442,7 @@ class Session(object):
         self._sequence_no += 2
         return sequence_no
 
-    def process_responses(self):
+    def handle(self):
         responses = self._response_reader.read_responses()
         if responses is None:
             return
@@ -475,73 +475,14 @@ class Session(object):
             thread.close()
         cui.kill_buffer(ThreadBuffer, self)
         cui.run_hook(ST_ON_KILL_SESSION)
-        self.socket.close()
-
-    def __str__(self):
-        return self.key()
-
-    def key(self):
-        return '%s:%s' % self.address
-
-    @staticmethod
-    def key_from_socket(socket):
-        return '%s:%s' % socket.getsockname()
-
-
-class DebugServer(object):
-    def __init__(self):
-        super(DebugServer, self).__init__()
-        self.host = cui.get_variable(ST_HOST)
-        self.port = cui.get_variable(ST_PORT)
-        self.server = None
-        self.clients = collections.OrderedDict()
-        self._init_server()
-
-    def _init_server(self):
-        self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.server.bind((self.host, self.port))
-        self.server.listen(5)
-        cui.message('Listening on %s:%s' % (self.host, self.port))
-
-    def _accept_client(self):
-        client_socket, client_address = self.server.accept()
-        session = Session(client_socket)
-        key = session.key()
-        cui.message('Connection received from %s' % key)
-        self.clients[key] = session
-
-    def process_sockets(self):
-        sock_list = []
-        if self.server:
-            sock_list.append(self.server)
-        sock_list.extend(map(lambda session: session.socket,
-                             self.clients.values()))
-
-        sock_read, _, _ = select.select(sock_list, [], [], 0)
-
-        for s in sock_read:
-            if s is self.server:
-                self._accept_client()
-            else:
-                session = self.clients[Session.key_from_socket(s)]
-                try:
-                    session.process_responses()
-                except (socket.error, ConnectionTerminated) as e:
-                    cui.message('Connection from %s terminated' % session)
-                    try:
-                        session.close()
-                    finally:
-                        del self.clients[session.key()]
-
-
-@cui.update_func
-def handle_sockets():
-    cui.get_variable(ST_SERVER).process_sockets()
+        super(Session, self).close()
 
 
 @cui.init_func
 def init_pydevds():
-    cui.def_variable(ST_SERVER, DebugServer())
-    cui.def_variable(ST_SOURCES, highlighter.SourceManager())
+    srv = server.Server(Session, ST_HOST, ST_PORT)
+    cui.set_variable(ST_SERVER, srv)
+    srv.start()
+
+    cui.set_variable(ST_SOURCES, highlighter.SourceManager())
     cui.switch_buffer(SessionBuffer)
