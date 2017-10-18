@@ -12,9 +12,9 @@ import errno
 
 from cui.tools import server
 
-from pydevds import constants
-from pydevds import payload
-from pydevds import highlighter
+from cui_pydevd import constants
+from cui_pydevd import payload
+from cui_pydevd import highlighter
 
 ST_HOST =            ['pydevds', 'host']
 ST_PORT =            ['pydevds', 'port']
@@ -479,7 +479,7 @@ class Session(server.Session):
 
 
 @cui.init_func
-def init_pydevds():
+def initialize():
     srv = server.Server(Session, ST_HOST, ST_PORT)
     cui.set_variable(ST_SERVER, srv)
     srv.start()

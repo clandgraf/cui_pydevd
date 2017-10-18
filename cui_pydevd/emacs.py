@@ -3,7 +3,7 @@
 # found in the LICENSE file.
 
 import cui
-import pydevds
+import cui_pydevd
 
 from cui_emacs import highlight_line
 
@@ -21,6 +21,6 @@ def on_kill_thread(thread):
 
 @cui.init_func
 def init_emacs_bindings():
-    cui.add_hook(pydevds.ST_ON_SET_FRAME, on_set_frame)
-    cui.add_hook(pydevds.ST_ON_RESUME, on_resume)
-    cui.add_hook(pydevds.ST_ON_KILL_THREAD, on_kill_thread)
+    cui.add_hook(cui_pydevd.ST_ON_SET_FRAME, on_set_frame)
+    cui.add_hook(cui_pydevd.ST_ON_RESUME, on_resume)
+    cui.add_hook(cui_pydevd.ST_ON_KILL_THREAD, on_kill_thread)
