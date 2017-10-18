@@ -9,6 +9,6 @@ setup(
     description =      "PyDev.Debugger Frontend for cui",
     license =          "BSD",
     url =              "https://github.com/clandgraf/cui_pydevd",
-    packages =         ['pydevd'],
+    packages =         ['pydevds'],
     install_requires = ['pygments']
 )
