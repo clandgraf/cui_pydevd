@@ -16,6 +16,8 @@ from cui_pydevd import constants
 from cui_pydevd import payload
 from cui_pydevd import highlighter
 
+WINDOW_SET_NAME = 'pydevd'
+
 ST_HOST =            ['pydevds', 'host']
 ST_PORT =            ['pydevds', 'port']
 ST_SERVER =          ['pydevds', 'debugger']
@@ -166,16 +168,20 @@ class CodeBuffer(ThreadBufferMixin, cui.buffers.ListBuffer):
         super(CodeBuffer, self).__init__(thread)
         self._thread = thread
         self._rows = []
-        self._line = 0
+        self._line = None
 
     def center_break(self):
-        self.set_variable(['win/buf', 'selected-item'], self._line - 1)
-        self.recenter()
+        if self._line is not None:
+            self.set_variable(['win/buf', 'selected-item'], self._line - 1)
+            self.recenter()
 
-    def set_file(self, file_path, line):
+    def set_file(self, file_path=None, line=None):
         src_mgr = cui.get_variable(ST_SOURCES)
-        self._rows = src_mgr.get_file(file_path)
-        self._line = line
+        if file_path:
+            self._rows = src_mgr.get_file(file_path)
+            self._line = line
+        else:
+            self._line = None
         self.center_break()
 
     def items(self):
@@ -186,7 +192,7 @@ class CodeBuffer(ThreadBufferMixin, cui.buffers.ListBuffer):
 
     def render_item(self, window, item, index):
         indexed_item = ['%%%dd' % len(str(len(self._rows))) % (index + 1), ' ', item]
-        if index + 1 == self._line:
+        if self._line is not None and index + 1 == self._line:
             return [{'content':    indexed_item,
                      'foreground': 'special',
                      'background': 'special'}]
@@ -362,6 +368,8 @@ class D_Thread(object):
         elif thread_info['type'] == 'thread_resume':
             self.state = constants.THREAD_STATE_RUNNING
             self.frames = []
+            cui.exec_if_buffer_exists(lambda b: b.set_file(),
+                                      CodeBuffer, self)
             cui.run_hook(ST_ON_RESUME, self)
 
     def _update_frames(self, frame_infos):
@@ -395,6 +403,8 @@ class D_Thread(object):
             frame.pending = self.session.send_command(constants.CMD_GET_FRAME,
                                                       '%s\t%s\t%s' % (self.id, frame.id, ''))
 
+        cui.new_window_set('%s %s' % (WINDOW_SET_NAME, self.id))
+        cui.switch_buffer(ThreadBuffer, self.session)
         cui.exec_in_buffer_visible(lambda b: b.set_file(frame.file, frame.line),
                                    CodeBuffer, self)
         cui.exec_in_buffer_visible(lambda b: b.set_frame(frame),
@@ -407,7 +417,7 @@ class D_Thread(object):
     def close(self):
         for b in [CodeBuffer, FrameBuffer, EvalBuffer]:
             cui.kill_buffer(b, self)
-        cui.delete_all_windows()
+        cui.delete_window_set_by_name('%s %s' % (WINDOW_SET_NAME, self.id))
         cui.run_hook(ST_ON_KILL_THREAD, self)
 
     @staticmethod
@@ -485,4 +495,4 @@ def initialize():
     srv.start()
 
     cui.set_variable(ST_SOURCES, highlighter.SourceManager())
-    cui.switch_buffer(SessionBuffer)
+    cui.buffer_visible(SessionBuffer)
