@@ -134,26 +134,45 @@ class EvalBuffer(ThreadBufferMixin, cui.buffers.ConsoleBuffer):
         self._thread.eval(self._frame, b)
 
 
-class FrameBuffer(ThreadBufferMixin, cui.buffers.ListBuffer):
+# 110     35      pid_9308_id_82670352    82235440        FRAME   __builtins__
+# 110     37      pid_9308_id_82670352    82235440        FRAME   __builtins__    ArithmeticError
+# 110     39      pid_9308_id_82670352    82235440        FRAME   __builtins__    ArithmeticError args
+
+class FrameBuffer(ThreadBufferMixin, cui.buffers.TreeBuffer):
     """Display frame contents."""
 
     __buffer_name__ = 'Frame'
 
     def __init__(self, thread):
-        super(FrameBuffer, self).__init__(thread)
+        super(FrameBuffer, self).__init__(thread, show_handles=True)
         self._thread = thread
-        self._rows = []
+        self._frame = None
 
     def set_frame(self, frame):
-        self._rows = []
-        if frame.variables:
-            for variable in frame.variables:
-                self._rows.append('%s = {%s} %s' % (variable['name'],
-                                                    variable['vtype'],
-                                                    variable['value']))
+        self._frame = frame
 
-    def items(self):
-        return self._rows
+    def get_roots(self):
+        return self._frame.variables if self._frame and self._frame.variables else []
+
+    def is_expanded(self, item):
+        return False
+
+    def set_expanded(self, item, expanded):
+        pass
+
+    def has_children(self, item):
+        return item['isContainer']
+
+    def fetch_children(self, item):
+        self._frame.request_variable(item)
+
+    def get_children(self, item):
+        return item['variables']
+
+    def render_node(self, window, item, depth, width):
+        return ['%s = {%s} %s' % (item['name'],
+                                  item['vtype'],
+                                  item['value'])]
 
 
 class CodeBuffer(ThreadBufferMixin, cui.buffers.ListBuffer):
@@ -224,7 +243,7 @@ class ThreadBuffer(ThreadBufferKeymap, cui.buffers.TreeBuffer):
         return 'pydevd Threads(%s:%s)' % session.address
 
     def __init__(self, session):
-        super(ThreadBuffer, self).__init__(session)
+        super(ThreadBuffer, self).__init__(session, show_handles=True)
         self.session = session
 
     @property
@@ -251,12 +270,19 @@ class ThreadBuffer(ThreadBufferKeymap, cui.buffers.TreeBuffer):
             frame.thread.display_frame(frame)
 
     def get_roots(self):
-        return self.session.threads.values()
+        return list(self.session.threads.values())
 
     def get_children(self, item):
-        if isinstance(item, D_Thread):
-            return item.frames
-        return []
+        return item.frames
+
+    def has_children(self, item):
+        return isinstance(item, D_Thread) and item.frames
+
+    def is_expanded(self, item):
+        return True
+
+    def set_expanded(self, item):
+        pass
 
     def render_node(self, window, item, depth, width):
         if isinstance(item, D_Thread):
@@ -316,7 +342,6 @@ class ResponseReader(object):
                 cui.message('Debugger ended connection')
                 if len(self._read_buffer) > 0:
                     cui.message('Received incomplete message: %s' % self._read_buffer)
-                # TODO raise exception to finish this session
                 raise server.ConnectionTerminated('received 0 bytes')
 
             self._read_buffer += r.decode('utf-8')
@@ -393,8 +418,7 @@ class D_Thread(object):
     def update_frame(self, sequence_no, variables):
         for frame in self.frames:
             if frame.pending == sequence_no:
-                frame.variables = variables
-                frame.pending = None
+                frame.set_variables(variables)
                 cui.exec_if_buffer_exists(lambda b: b.set_frame(frame),
                                           FrameBuffer, self)
 
@@ -434,6 +458,37 @@ class D_Frame(object):
         self.line = line
         self.variables = None
         self.pending = None
+        self.pending_vars = {}
+
+    def set_variables(self, variables):
+        self.variables = variables
+        for var in variables:
+            var['pending'] = None
+            var['parent'] = None
+            var['variables'] = []
+        self.pending = None
+
+    def _get_path(self, variable):
+        path = []
+        while variable:
+            path.insert(0, variable['name'])
+            variable = variable['parent']
+
+    def request_variable(self, variable):
+        if variable['pending']:
+            return
+
+        path = self._get_path(variable)
+        joined_path = ' '.join(path)
+        arg_string = '%(thread)s\t%(frame)s\tFRAME\t%(path)s' % {
+            'thread': self.thread.id,
+            'frame': self.id,
+            'path': '\t'.join(path)
+        }
+        sequence_no = self.thread.session.send_command(constants.CMD_GET_VAR,
+                                                       arg_string)
+        variable['pending'] = sequence_no
+        self.pending_vars[sequence_no] = variable
 
 
 class Session(server.Session):
