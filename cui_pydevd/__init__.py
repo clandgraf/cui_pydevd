@@ -4,30 +4,15 @@
 
 import collections
 import cui
-import cui.keymap
-import functools
 import socket
-import threading
 import errno
 
 from cui.tools import server
 
+from cui_pydevd import buffers
 from cui_pydevd import constants
 from cui_pydevd import payload
 from cui_pydevd import highlighter
-
-WINDOW_SET_NAME = 'pydevd'
-
-ST_HOST =            ['pydevds', 'host']
-ST_PORT =            ['pydevds', 'port']
-ST_SERVER =          ['pydevds', 'debugger']
-ST_SOURCES =         ['pydevds', 'sources']
-ST_ON_SET_FRAME =    ['pydevds', 'on-set-frame']
-ST_ON_SUSPEND =      ['pydevds', 'on-suspend']
-ST_ON_RESUME =       ['pydevds', 'on-resume']
-ST_ON_KILL_THREAD =  ['pydevds', 'on-kill-thread']
-ST_ON_KILL_SESSION = ['pydevds', 'on-kill-session']
-ST_DEBUG_LOG =       ['logging', 'pydevds-comm']
 
 cui.def_foreground('comment',         'yellow')
 cui.def_foreground('keyword',         'magenta')
@@ -36,284 +21,17 @@ cui.def_foreground('string',          'green')
 cui.def_foreground('string_escape',   'yellow')
 cui.def_foreground('string_interpol', 'yellow')
 
-cui.def_variable(ST_HOST,      'localhost')
-cui.def_variable(ST_PORT,      4040)
-cui.def_variable(ST_SERVER,    None)
-cui.def_variable(ST_SOURCES,   None)
-cui.def_variable(ST_DEBUG_LOG, False)
-
-cui.def_hook(ST_ON_SET_FRAME)
-cui.def_hook(ST_ON_SUSPEND)
-cui.def_hook(ST_ON_RESUME)
-cui.def_hook(ST_ON_KILL_THREAD)
-cui.def_hook(ST_ON_KILL_SESSION)
-
-
-# ---------------------------- Buffers ----------------------------
-
-def with_thread(fn):
-    @functools.wraps(fn)
-    def _fn(*args, **kwargs):
-        thread = cui.current_buffer().thread
-        if thread.state == constants.THREAD_STATE_SUSPENDED:
-            return fn(thread, *args, **kwargs)
-        else:
-            cui.message('Thread %s must be suspended.' % thread.name)
-    return _fn
-
-def with_frame(fn):
-    @functools.wraps(fn)
-    def _fn(*args, **kwargs):
-        frame = cui.current_buffer().selected_frame()
-        if frame:
-            return fn(frame.thread, frame, *args, **kwargs)
-    return _fn
-
-@with_thread
-def py_step_into(thread):
-    """Step into next expression in current thread."""
-    thread.step_into()
-
-@with_thread
-def py_step_over(thread):
-    """Step over next expression in current thread."""
-    thread.step_over()
-
-@with_thread
-def py_step_return(thread):
-    """Execute until function returns."""
-    thread.step_return()
-
-@with_thread
-def py_resume(thread):
-    """Continue execution until next breakpoint is hit."""
-    thread.resume()
-
-@with_frame
-def py_open_eval(thread, frame):
-    """Open a buffer to evaluate expressions in thread."""
-    cui.exec_in_buffer_visible(lambda b: b.set_frame(frame),
-                               EvalBuffer, thread,
-                               to_window=True)
-
-class ThreadBufferKeymap(cui.keymap.WithKeymap):
-    __keymap__ = {
-        '<f5>': py_step_into,
-        '<f6>': py_step_over,
-        '<f7>': py_step_return,
-        '<f8>': py_resume
-    }
-
-class ThreadBufferMixin(ThreadBufferKeymap):
-    @classmethod
-    def name(cls, thread):
-        return ('%s (%s:%s/%s)'
-                % (cls.__buffer_name__,
-                   thread.session.address[0],
-                   thread.session.address[1],
-                   thread.id))
-
-    @property
-    def thread(self):
-        return self._thread
-
-class EvalBuffer(ThreadBufferMixin, cui.buffers.ConsoleBuffer):
-    """Evaluate expressions in the current frame."""
-
-    __buffer_name__ = 'Eval'
-
-    def __init__(self, thread):
-        super(EvalBuffer, self).__init__(thread)
-        self._thread = thread
-        self._frame = None
-
-    def set_frame(self, frame):
-        self._frame = frame
-
-    def on_send_current_buffer(self, b):
-        self._thread.eval(self._frame, b)
-
-
-# 110     35      pid_9308_id_82670352    82235440        FRAME   __builtins__
-# 110     37      pid_9308_id_82670352    82235440        FRAME   __builtins__    ArithmeticError
-# 110     39      pid_9308_id_82670352    82235440        FRAME   __builtins__    ArithmeticError args
-
-class FrameBuffer(ThreadBufferMixin, cui.buffers.TreeBuffer):
-    """Display frame contents."""
-
-    __buffer_name__ = 'Frame'
-
-    def __init__(self, thread):
-        super(FrameBuffer, self).__init__(thread, show_handles=True)
-        self._thread = thread
-        self._frame = None
-
-    def set_frame(self, frame):
-        self._frame = frame
-
-    def get_roots(self):
-        return self._frame.variables if self._frame and self._frame.variables else []
-
-    def is_expanded(self, item):
-        return False
-
-    def set_expanded(self, item, expanded):
-        pass
-
-    def has_children(self, item):
-        return item['isContainer']
-
-    def fetch_children(self, item):
-        self._frame.request_variable(item)
-
-    def get_children(self, item):
-        return item['variables']
-
-    def render_node(self, window, item, depth, width):
-        return ['%s = {%s} %s' % (item['name'],
-                                  item['vtype'],
-                                  item['value'])]
-
-
-class CodeBuffer(ThreadBufferMixin, cui.buffers.ListBuffer):
-    """Display the source of the file being currently debugged."""
-
-    __buffer_name__ = 'Code'
-    __keymap__ = {
-        'C-b':  lambda: cui.current_buffer().center_break()
-    }
-
-    def __init__(self, thread):
-        super(CodeBuffer, self).__init__(thread)
-        self._thread = thread
-        self._rows = []
-        self._line = None
-
-    def center_break(self):
-        if self._line is not None:
-            self.set_variable(['win/buf', 'selected-item'], self._line - 1)
-            self.recenter()
-
-    def set_file(self, file_path=None, line=None):
-        src_mgr = cui.get_variable(ST_SOURCES)
-        if file_path:
-            self._rows = src_mgr.get_file(file_path)
-            self._line = line
-        else:
-            self._line = None
-        self.center_break()
-
-    def items(self):
-        return self._rows
-
-    def hide_selection(self):
-        return self._line == self.get_variable(['win/buf', 'selected-item']) + 1
-
-    def render_item(self, window, item, index):
-        indexed_item = ['%%%dd' % len(str(len(self._rows))) % (index + 1), ' ', item]
-        if self._line is not None and index + 1 == self._line:
-            return [{'content':    indexed_item,
-                     'foreground': 'special',
-                     'background': 'special'}]
-        else:
-            return [indexed_item]
-
-
-thread_state_str = {
-    constants.THREAD_STATE_INITIAL:   'INI',
-    constants.THREAD_STATE_SUSPENDED: 'SUS',
-    constants.THREAD_STATE_RUNNING:   'RUN'
-}
-
-thread_state_col = {
-    constants.THREAD_STATE_INITIAL:   'default',
-    constants.THREAD_STATE_SUSPENDED: 'error',
-    constants.THREAD_STATE_RUNNING:   'info'
-}
-
-class ThreadBuffer(ThreadBufferKeymap, cui.buffers.TreeBuffer):
-    """Display all existing threads in the current session."""
-
-    __keymap__ = {
-        'C-c':  py_open_eval
-    }
-
-    @classmethod
-    def name(cls, session):
-        return 'pydevd Threads(%s:%s)' % session.address
-
-    def __init__(self, session):
-        super(ThreadBuffer, self).__init__(session, show_handles=True)
-        self.session = session
-
-    @property
-    def thread(self):
-        return self.selected_thread()
-
-    def selected_thread(self):
-        item = self.selected_item()
-        if isinstance(item, D_Thread):
-            return item
-        elif isinstance(item, D_Frame):
-            return item.thread
-
-    def selected_frame(self):
-        item = self.selected_item()
-        return item           if isinstance(item, D_Frame) else \
-               item.frames[0] if isinstance(item, D_Thread) and \
-                                 item.state == constants.THREAD_STATE_SUSPENDED else \
-               None
-
-    def on_item_selected(self):
-        frame = self.selected_frame()
-        if frame:
-            frame.thread.display_frame(frame)
-
-    def get_roots(self):
-        return list(self.session.threads.values())
-
-    def get_children(self, item):
-        return item.frames
-
-    def has_children(self, item):
-        return isinstance(item, D_Thread) and item.frames
-
-    def is_expanded(self, item):
-        return True
-
-    def set_expanded(self, item):
-        pass
-
-    def render_node(self, window, item, depth, width):
-        if isinstance(item, D_Thread):
-            return [[{'content':    '%s' % thread_state_str[item.state],
-                      'foreground': thread_state_col[item.state]},
-                     ' %s' % item.name]]
-        elif isinstance(item, D_Frame):
-            return [cui.buffers.pad_left(width,
-                                         '%s:%s' % (item.file, item.line))]
-
-
-class SessionBuffer(cui.buffers.ListBuffer):
-    """Display a list of active pydevd sessions."""
-    @classmethod
-    def name(cls):
-        return "pydevd Sessions"
-
-    def on_item_selected(self):
-        cui.switch_buffer(ThreadBuffer, self.selected_item())
-
-    def on_pre_render(self):
-        self._flattened = list(cui.get_variable(ST_SERVER).clients.values())
-
-    def items(self):
-        return self._flattened
-
-    def render_item(self, window, item, index):
-        return [str(item)]
-
-
-# -----------------------------------------------------------------------
+cui.def_variable(constants.ST_HOST,      'localhost')
+cui.def_variable(constants.ST_PORT,      4040)
+cui.def_variable(constants.ST_SERVER,    None)
+cui.def_variable(constants.ST_SOURCES,   None)
+cui.def_variable(constants.ST_DEBUG_LOG, False)
+
+cui.def_hook(constants.ST_ON_SET_FRAME)
+cui.def_hook(constants.ST_ON_SUSPEND)
+cui.def_hook(constants.ST_ON_RESUME)
+cui.def_hook(constants.ST_ON_KILL_THREAD)
+cui.def_hook(constants.ST_ON_KILL_SESSION)
 
 
 class Command(object):
@@ -347,7 +65,7 @@ class ResponseReader(object):
             self._read_buffer += r.decode('utf-8')
             while self._read_buffer.find('\n') != -1:
                 response, self._read_buffer = self._read_buffer.split('\n', 1)
-                if cui.get_variable(ST_DEBUG_LOG):
+                if cui.get_variable(constants.ST_DEBUG_LOG):
                     cui.message('Received response: \n%s' % (response,))
                 responses.append(Command.from_string(response))
         except socket.error as e:
@@ -365,6 +83,17 @@ class D_Thread(object):
         self.state = state
         self.frames = []
         self.evals = set()
+
+    def _init_window_set(self):
+        name = '%s %s' % (constants.WINDOW_SET_NAME, self.id)
+        if not cui.has_window_set(name):
+            cui.new_window_set(name)
+            cui.buffer_visible(buffers.ThreadBuffer, self.session,
+                               split_method=None)
+            cui.buffer_visible(buffers.CodeBuffer, self,
+                               split_method=cui.split_window_below)
+            cui.buffer_visible(buffers.FrameBuffer, self,
+                               split_method=cui.split_window_right)
 
     def step_into(self):
         self.session.send_command(constants.CMD_STEP_INTO, self.id)
@@ -394,8 +123,8 @@ class D_Thread(object):
             self.state = constants.THREAD_STATE_RUNNING
             self.frames = []
             cui.exec_if_buffer_exists(lambda b: b.set_file(),
-                                      CodeBuffer, self)
-            cui.run_hook(ST_ON_RESUME, self)
+                                      buffers.CodeBuffer, self)
+            cui.run_hook(constants.ST_ON_RESUME, self)
 
     def _update_frames(self, frame_infos):
         self.frames = []
@@ -406,43 +135,40 @@ class D_Thread(object):
                                        frame_info['name'],
                                        frame_info['line']))
         frame = self.frames[0]
-        cui.run_hook(ST_ON_SUSPEND, self, frame.file, frame.line)
+        cui.run_hook(constants.ST_ON_SUSPEND, self, frame.file, frame.line)
         self.display_frame(frame)
 
     def on_eval(self, sequence_no, variables):
         if sequence_no in self.evals:
             self.evals.remove(sequence_no)
             cui.exec_if_buffer_exists(lambda b: b.extend(*[v['value'] for v in variables]),
-                                      EvalBuffer, self)
+                                      buffers.EvalBuffer, self)
 
     def update_frame(self, sequence_no, variables):
         for frame in self.frames:
             if frame.pending == sequence_no:
                 frame.set_variables(variables)
                 cui.exec_if_buffer_exists(lambda b: b.set_frame(frame),
-                                          FrameBuffer, self)
+                                          buffers.FrameBuffer, self)
 
     def display_frame(self, frame):
         if frame.variables is None and frame.pending is None:
             frame.pending = self.session.send_command(constants.CMD_GET_FRAME,
                                                       '%s\t%s\t%s' % (self.id, frame.id, ''))
-
-        cui.new_window_set('%s %s' % (WINDOW_SET_NAME, self.id))
-        cui.switch_buffer(ThreadBuffer, self.session)
-        cui.exec_in_buffer_visible(lambda b: b.set_file(frame.file, frame.line),
-                                   CodeBuffer, self)
-        cui.exec_in_buffer_visible(lambda b: b.set_frame(frame),
-                                   FrameBuffer, self,
-                                   split_method=cui.split_window_right)
+        self._init_window_set()
+        cui.exec_in_buffer_window(lambda b: b.set_file(frame.file, frame.line),
+                                  buffers.CodeBuffer, self)
         cui.exec_if_buffer_exists(lambda b: b.set_frame(frame),
-                                  EvalBuffer, self)
-        cui.run_hook(ST_ON_SET_FRAME, self, frame.file, frame.line)
+                                  buffers.FrameBuffer, self)
+        cui.exec_if_buffer_exists(lambda b: b.set_frame(frame),
+                                  buffers.EvalBuffer, self)
+        cui.run_hook(constants.ST_ON_SET_FRAME, self, frame.file, frame.line)
 
     def close(self):
-        for b in [CodeBuffer, FrameBuffer, EvalBuffer]:
+        for b in [buffers.CodeBuffer, buffers.FrameBuffer, buffers.EvalBuffer]:
             cui.kill_buffer(b, self)
-        cui.delete_window_set_by_name('%s %s' % (WINDOW_SET_NAME, self.id))
-        cui.run_hook(ST_ON_KILL_THREAD, self)
+        cui.delete_window_set_by_name('%s %s' % (constants.WINDOW_SET_NAME, self.id))
+        cui.run_hook(constants.ST_ON_KILL_THREAD, self)
 
     @staticmethod
     def from_thread_info(session, thread_info):
@@ -538,16 +264,16 @@ class Session(server.Session):
     def close(self):
         for thread in self.threads.values():
             thread.close()
-        cui.kill_buffer(ThreadBuffer, self)
-        cui.run_hook(ST_ON_KILL_SESSION)
+        cui.kill_buffer(buffers.ThreadBuffer, self)
+        cui.run_hook(constants.ST_ON_KILL_SESSION)
         super(Session, self).close()
 
 
 @cui.init_func
 def initialize():
-    srv = server.Server(Session, ST_HOST, ST_PORT)
-    cui.set_variable(ST_SERVER, srv)
+    srv = server.Server(Session, constants.ST_HOST, constants.ST_PORT)
+    cui.set_variable(constants.ST_SERVER, srv)
     srv.start()
 
-    cui.set_variable(ST_SOURCES, highlighter.SourceManager())
-    cui.buffer_visible(SessionBuffer)
+    cui.set_variable(constants.ST_SOURCES, highlighter.SourceManager())
+    cui.buffer_visible(buffers.SessionBuffer)

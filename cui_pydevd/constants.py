@@ -2,6 +2,19 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+WINDOW_SET_NAME = 'pydevd'
+
+ST_HOST =            ['pydevds', 'host']
+ST_PORT =            ['pydevds', 'port']
+ST_SERVER =          ['pydevds', 'debugger']
+ST_SOURCES =         ['pydevds', 'sources']
+ST_ON_SET_FRAME =    ['pydevds', 'on-set-frame']
+ST_ON_SUSPEND =      ['pydevds', 'on-suspend']
+ST_ON_RESUME =       ['pydevds', 'on-resume']
+ST_ON_KILL_THREAD =  ['pydevds', 'on-kill-thread']
+ST_ON_KILL_SESSION = ['pydevds', 'on-kill-session']
+ST_DEBUG_LOG =       ['logging', 'pydevds-comm']
+
 CMD_RUN = 101
 CMD_LIST_THREADS = 102
 CMD_THREAD_CREATE = 103
