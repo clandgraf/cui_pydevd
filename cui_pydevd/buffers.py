@@ -16,6 +16,7 @@ def with_thread(fn):
             cui.message('Thread %s must be suspended.' % thread.name)
     return _fn
 
+
 def with_frame(fn):
     @functools.wraps(fn)
     def _fn(*args, **kwargs):
@@ -24,25 +25,30 @@ def with_frame(fn):
             return fn(frame.thread, frame, *args, **kwargs)
     return _fn
 
+
 @with_thread
 def py_step_into(thread):
     """Step into next expression in current thread."""
     thread.step_into()
+
 
 @with_thread
 def py_step_over(thread):
     """Step over next expression in current thread."""
     thread.step_over()
 
+
 @with_thread
 def py_step_return(thread):
     """Execute until function returns."""
     thread.step_return()
 
+
 @with_thread
 def py_resume(thread):
     """Continue execution until next breakpoint is hit."""
     thread.resume()
+
 
 @with_frame
 def py_open_eval(thread, frame):
@@ -50,6 +56,7 @@ def py_open_eval(thread, frame):
     cui.exec_in_buffer_visible(lambda b: b.set_frame(frame),
                                EvalBuffer, thread,
                                to_window=True)
+
 
 class ThreadBufferKeymap(cui.keymap.WithKeymap):
     __keymap__ = {
@@ -89,10 +96,6 @@ class EvalBuffer(ThreadBufferMixin, cui.buffers.ConsoleBuffer):
         self._thread.eval(self._frame, b)
 
 
-# 110     35      pid_9308_id_82670352    82235440        FRAME   __builtins__
-# 110     37      pid_9308_id_82670352    82235440        FRAME   __builtins__    ArithmeticError
-# 110     39      pid_9308_id_82670352    82235440        FRAME   __builtins__    ArithmeticError args
-
 class FrameBuffer(ThreadBufferMixin, cui.buffers.TreeBuffer):
     """Display frame contents."""
 
@@ -110,13 +113,13 @@ class FrameBuffer(ThreadBufferMixin, cui.buffers.TreeBuffer):
         return self._frame.variables if self._frame and self._frame.variables else []
 
     def is_expanded(self, item):
-        return False
+        return item['expanded']
 
     def set_expanded(self, item, expanded):
-        pass
+        item['expanded'] = expanded
 
     def has_children(self, item):
-        return item['isContainer']
+        return item['has_children']
 
     def fetch_children(self, item):
         self._frame.request_variable(item)

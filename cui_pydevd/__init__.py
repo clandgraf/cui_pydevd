@@ -115,10 +115,16 @@ class D_Thread(object):
                                          'frame': frame.id,
                                          'expr': expr}))
 
-    def update(self, thread_info):
+    def on_eval(self, sequence_no, variables):
+        if sequence_no in self.evals:
+            self.evals.remove(sequence_no)
+            cui.exec_if_buffer_exists(lambda b: b.extend(*[v['value'] for v in variables]),
+                                      buffers.EvalBuffer, self)
+
+    def update_thread(self, thread_info):
         if thread_info['type'] == 'thread_suspend':
             self.state = constants.THREAD_STATE_SUSPENDED
-            self._update_frames(thread_info['frames'])
+            self._init_frames(thread_info['frames'])
         elif thread_info['type'] == 'thread_resume':
             self.state = constants.THREAD_STATE_RUNNING
             self.frames = []
@@ -126,7 +132,7 @@ class D_Thread(object):
                                       buffers.CodeBuffer, self)
             cui.run_hook(constants.ST_ON_RESUME, self)
 
-    def _update_frames(self, frame_infos):
+    def _init_frames(self, frame_infos):
         self.frames = []
         for frame_info in frame_infos:
             self.frames.append(D_Frame(self,
@@ -138,31 +144,21 @@ class D_Thread(object):
         cui.run_hook(constants.ST_ON_SUSPEND, self, frame.file, frame.line)
         self.display_frame(frame)
 
-    def on_eval(self, sequence_no, variables):
-        if sequence_no in self.evals:
-            self.evals.remove(sequence_no)
-            cui.exec_if_buffer_exists(lambda b: b.extend(*[v['value'] for v in variables]),
-                                      buffers.EvalBuffer, self)
+    def display_frame(self, frame):
+        self._init_window_set()
+        frame.display()
 
     def update_frame(self, sequence_no, variables):
         for frame in self.frames:
             if frame.pending == sequence_no:
-                frame.set_variables(variables)
+                frame.init_variables(variables)
                 cui.exec_if_buffer_exists(lambda b: b.set_frame(frame),
                                           buffers.FrameBuffer, self)
 
-    def display_frame(self, frame):
-        if frame.variables is None and frame.pending is None:
-            frame.pending = self.session.send_command(constants.CMD_GET_FRAME,
-                                                      '%s\t%s\t%s' % (self.id, frame.id, ''))
-        self._init_window_set()
-        cui.exec_in_buffer_window(lambda b: b.set_file(frame.file, frame.line),
-                                  buffers.CodeBuffer, self)
-        cui.exec_if_buffer_exists(lambda b: b.set_frame(frame),
-                                  buffers.FrameBuffer, self)
-        cui.exec_if_buffer_exists(lambda b: b.set_frame(frame),
-                                  buffers.EvalBuffer, self)
-        cui.run_hook(constants.ST_ON_SET_FRAME, self, frame.file, frame.line)
+    def update_variable(self, sequence_no, variables):
+        for frame in self.frames:
+            if sequence_no in frame.pending_vars:
+                frame.update_variable(sequence_no, variables)
 
     def close(self):
         for b in [buffers.CodeBuffer, buffers.FrameBuffer, buffers.EvalBuffer]:
@@ -186,19 +182,39 @@ class D_Frame(object):
         self.pending = None
         self.pending_vars = {}
 
-    def set_variables(self, variables):
-        self.variables = variables
-        for var in variables:
-            var['pending'] = None
-            var['parent'] = None
-            var['variables'] = []
-        self.pending = None
+    def display(self):
+        if self.variables is None and self.pending is None:
+            self.pending = self.thread.session.send_command(constants.CMD_GET_FRAME,
+                                                            '%s\t%s\t%s'
+                                                            % (self.thread.id, self.id, ''))
+
+        cui.exec_in_buffer_window(lambda b: b.set_file(self.file, self.line),
+                                  buffers.CodeBuffer, self.thread)
+        cui.exec_if_buffer_exists(lambda b: b.set_frame(self),
+                                  buffers.FrameBuffer, self.thread)
+        cui.exec_if_buffer_exists(lambda b: b.set_frame(self),
+                                  buffers.EvalBuffer, self.thread)
+        cui.run_hook(constants.ST_ON_SET_FRAME, self.thread, self.file, self.line)
+
+    def _extend_variables(self, variables, parent=None):
+        for variable in variables:
+            variable['pending'] = None
+            variable['has_children'] = variable['isContainer']
+            variable['parent'] = parent
+            variable['variables'] = []
+            variable['expanded'] = False
+        return variables
 
     def _get_path(self, variable):
         path = []
         while variable:
             path.insert(0, variable['name'])
             variable = variable['parent']
+        return path
+
+    def init_variables(self, variables):
+        self.variables = self._extend_variables(variables)
+        self.pending = None
 
     def request_variable(self, variable):
         if variable['pending']:
@@ -215,6 +231,14 @@ class D_Frame(object):
                                                        arg_string)
         variable['pending'] = sequence_no
         self.pending_vars[sequence_no] = variable
+
+    def update_variable(self, sequence_no, variables):
+        variable = self.pending_vars.pop(sequence_no)
+        if variables:
+            variable['variables'] = self._extend_variables(variables, variable)
+        else:
+            variable['has_children'] = False
+        variable['pending'] = None
 
 
 class Session(server.Session):
@@ -251,12 +275,15 @@ class Session(server.Session):
         elif response.command == constants.CMD_THREAD_SUSPEND:
             for item in response.payload:
                 if item['type'] == 'thread_suspend':
-                    self.threads[item['id']].update(item)
+                    self.threads[item['id']].update_thread(item)
         elif response.command == constants.CMD_THREAD_RESUME:
-            self.threads[response.payload['id']].update(response.payload)
+            self.threads[response.payload['id']].update_thread(response.payload)
         elif response.command == constants.CMD_GET_FRAME:
             for thread in self.threads.values():
                 thread.update_frame(response.sequence_no, response.payload)
+        elif response.command == constants.CMD_GET_VAR:
+            for thread in self.threads.values():
+                thread.update_variable(response.sequence_no, response.payload)
         elif response.command == constants.CMD_EVAL_EXPR:
             for thread in self.threads.values():
                 thread.on_eval(response.sequence_no, response.payload)
