@@ -252,8 +252,8 @@ class Session(server.Session):
 
     def send_command(self, command, argument=''):
         sequence_no = self._sequence_no
-        self.socket.send(('%s\t%s\t%s\n'
-                          % (command, sequence_no, argument)).encode('utf-8'))
+        self.send_all(('%s\t%s\t%s\n'
+                       % (command, sequence_no, argument)).encode('utf-8'))
         self._sequence_no += 2
         return sequence_no
 
