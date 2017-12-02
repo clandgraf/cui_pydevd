@@ -12,7 +12,6 @@ from cui.tools import server
 from cui_pydevd import buffers
 from cui_pydevd import constants
 from cui_pydevd import payload
-from cui_pydevd import highlighter
 
 cui.def_foreground('comment',         'yellow')
 cui.def_foreground('keyword',         'magenta')
@@ -24,7 +23,6 @@ cui.def_foreground('string_interpol', 'yellow')
 cui.def_variable(constants.ST_HOST,      'localhost')
 cui.def_variable(constants.ST_PORT,      4040)
 cui.def_variable(constants.ST_SERVER,    None)
-cui.def_variable(constants.ST_SOURCES,   None)
 cui.def_variable(constants.ST_DEBUG_LOG, False)
 
 cui.def_hook(constants.ST_ON_SET_FRAME)
@@ -302,5 +300,4 @@ def initialize():
     cui.set_variable(constants.ST_SERVER, srv)
     srv.start()
 
-    cui.set_variable(constants.ST_SOURCES, highlighter.SourceManager())
     cui.buffer_visible(buffers.SessionBuffer)

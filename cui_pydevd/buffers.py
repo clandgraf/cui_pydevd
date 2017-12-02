@@ -1,6 +1,11 @@
+# Copyright (c) 2017 Christoph Landgraf. All rights reserved.
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
 import cui
 import cui.keymap
 import cui_pydevd
+import cui_source
 import functools
 
 from cui_pydevd import constants
@@ -133,8 +138,10 @@ class FrameBuffer(ThreadBufferMixin, cui.buffers.TreeBuffer):
                                   item['value'])]
 
 
-class CodeBuffer(ThreadBufferMixin, cui.buffers.ListBuffer):
-    """Display the source of the file being currently debugged."""
+class CodeBuffer(ThreadBufferMixin, cui_source.BaseFileBuffer):
+    """
+    Display the source of the file being currently debugged.
+    """
 
     __buffer_name__ = 'Code'
     __keymap__ = {
@@ -144,7 +151,6 @@ class CodeBuffer(ThreadBufferMixin, cui.buffers.ListBuffer):
     def __init__(self, thread):
         super(CodeBuffer, self).__init__(thread)
         self._thread = thread
-        self._rows = []
         self._line = None
 
     def center_break(self):
@@ -154,27 +160,22 @@ class CodeBuffer(ThreadBufferMixin, cui.buffers.ListBuffer):
 
     def set_file(self, file_path=None, line=None):
         if file_path:
-            src_mgr = cui.get_variable(constants.ST_SOURCES)
-            self._rows = src_mgr.get_file(file_path)
+            super(CodeBuffer, self).set_file(file_path)
             self._line = line
         else:
             self._line = None
         self.center_break()
 
-    def items(self):
-        return self._rows
-
     def hide_selection(self):
         return self._line == self.get_variable(['win/buf', 'selected-item']) + 1
 
     def render_item(self, window, item, index):
-        indexed_item = ['%%%dd' % len(str(len(self._rows))) % (index + 1), ' ', item]
+        item = super(CodeBuffer, self).render_item(window, item, index)
         if self._line is not None and index + 1 == self._line:
-            return [{'content':    indexed_item,
+            return [{'content':    item[0],
                      'foreground': 'special',
                      'background': 'special'}]
-        else:
-            return [indexed_item]
+        return item
 
 
 thread_state_str = {
@@ -253,7 +254,9 @@ class ThreadBuffer(ThreadBufferKeymap, cui.buffers.TreeBuffer):
 
 
 class SessionBuffer(cui.buffers.ListBuffer):
-    """Display a list of active pydevd sessions."""
+    """
+    Display a list of active pydevd sessions.
+    """
     @classmethod
     def name(cls):
         return "pydevd Sessions"

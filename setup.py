@@ -10,5 +10,5 @@ setup(
     license =          "BSD",
     url =              "https://github.com/clandgraf/cui_pydevd",
     packages =         ['cui_pydevd'],
-    install_requires = ['pygments']
+    install_requires = ['cui_source']
 )
