@@ -35,6 +35,12 @@ def parse_object(payload):
 def parse_return(payload):
     return parse_object(et.fromstring(payload))
 
+def parse_version_response(payload):
+    return payload
+
+def parse_thread_create(payload):
+    return parse_object(et.fromstring(payload))
+
 def parse_thread_suspend(payload):
     return [{'type':   'thread_suspend',
              'id':     thread.attrib['id'],
@@ -48,8 +54,10 @@ def parse_thread_resume(payload):
             'reason': reason}
 
 payload_factory_map = {
+    constants.CMD_THREAD_CREATE: parse_thread_create,
     constants.CMD_THREAD_SUSPEND: parse_thread_suspend,
     constants.CMD_THREAD_RESUME: parse_thread_resume,
+    constants.CMD_VERSION: parse_version_response,
     constants.CMD_GET_FRAME: parse_return,
     constants.CMD_GET_VAR: parse_return,
     constants.CMD_RETURN: parse_return,

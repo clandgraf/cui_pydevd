@@ -4,10 +4,13 @@
 
 import collections
 import cui
-import socket
+import cui_source
 import errno
+import os
+import socket
 
 from cui.tools import server
+from cui.util import find_index
 
 from cui_pydevd import buffers
 from cui_pydevd import constants
@@ -64,7 +67,7 @@ class ResponseReader(object):
             while self._read_buffer.find('\n') != -1:
                 response, self._read_buffer = self._read_buffer.split('\n', 1)
                 if cui.get_variable(constants.ST_DEBUG_LOG):
-                    cui.message('Received response: \n%s' % (response,))
+                    cui.message('=== Received response: \n%s' % (response,))
                 responses.append(Command.from_string(response))
         except socket.error as e:
             if e.args[0] not in [errno.EAGAIN, errno.EWOULDBLOCK]:
@@ -145,6 +148,9 @@ class D_Thread(object):
     def display_frame(self, frame):
         self._init_window_set()
         frame.display()
+
+    def update(self, thread_info):
+        self.name = thread_info['name']
 
     def update_frame(self, sequence_no, variables):
         for frame in self.frames:
@@ -245,13 +251,22 @@ class Session(server.Session):
         self.threads = collections.OrderedDict()
         self._response_reader = ResponseReader(self)
         self._sequence_no = 1
+
+        # Initialize debugger, load threads, start process
+        self.send_command(constants.CMD_VERSION, 'WINDOWS\tID')
         self.send_command(constants.CMD_LIST_THREADS)
         self.send_command(constants.CMD_RUN)
 
+    def check_debugger_version(self, version):
+        cui.message('pydevd version (%s): %s' % (self, version))
+
     def send_command(self, command, argument=''):
         sequence_no = self._sequence_no
-        self.send_all(('%s\t%s\t%s\n'
-                       % (command, sequence_no, argument)).encode('utf-8'))
+        payload = ('%s\t%s\t%s\n'
+                   % (command, sequence_no, argument))
+        if cui.get_variable(constants.ST_DEBUG_LOG):
+            cui.message('=== Sending command: \n%s' % (payload,))
+        self.send_all(payload.encode('utf-8'))
         self._sequence_no += 2
         return sequence_no
 
@@ -262,14 +277,23 @@ class Session(server.Session):
         for response in responses:
             self._dispatch(response)
 
+    def _dispatch_thread_info(self, thread_info):
+        if thread_info['id'] in self.threads:
+            self.threads[thread_info['id']].update(thread_info)
+        else:
+            self.threads[thread_info['id']] = D_Thread.from_thread_info(self, thread_info)
+
     def _dispatch(self, response):
-        if response.command == constants.CMD_RETURN:
+        if response.command == constants.CMD_VERSION:
+            self.check_debugger_version(response.payload)
+        elif response.command == constants.CMD_RETURN:
             for item in response.payload:
                 if item['type'] == 'thread_info':
-                    if item['id'] in self.threads:
-                        self.threads[item['id']].update(item)
-                    else:
-                        self.threads[item['id']] = D_Thread.from_thread_info(self, item)
+                    self._dispatch_thread_info(item)
+        elif response.command == constants.CMD_THREAD_CREATE:
+            item = response.payload[0]
+            if item['type'] == 'thread_info':
+                self._dispatch_thread_info(item)
         elif response.command == constants.CMD_THREAD_SUSPEND:
             for item in response.payload:
                 if item['type'] == 'thread_suspend':
@@ -285,6 +309,8 @@ class Session(server.Session):
         elif response.command == constants.CMD_EVAL_EXPR:
             for thread in self.threads.values():
                 thread.on_eval(response.sequence_no, response.payload)
+        else:
+            cui.message('Unhandled response from pydevd: %s' % response.command)
 
     def close(self):
         for thread in self.threads.values():
@@ -294,8 +320,50 @@ class Session(server.Session):
         super(Session, self).close()
 
 
+class Breakpoints(cui_source.AnnotationSource):
+    MARKER = 'B'
+
+    def __init__(self):
+        self._breakpoints = {}
+
+    def handles_file(self, path):
+        return os.path.splitext(path)[1] == '.py'
+
+    def get_annotations(self, path, first_line, length):
+        breakpoints = self._breakpoints.get(path, [])
+        start_index = find_index(breakpoints,
+                                 lambda line, _: line >= first_line,
+                                 default_index=len(breakpoints))
+        end_index = find_index(breakpoints,
+                               lambda line, _: line >= first_line + length,
+                               default_index=len(breakpoints))
+        return breakpoints[start_index:end_index]
+
+    def add_breakpoint(self, path, line):
+        if path not in self._breakpoints:
+            self._breakpoints[path] = []
+        self._breakpoints[path].append(line)
+        self._breakpoints[path].sort()
+
+
+def add_breakpoint(path, line):
+    return cui.get_variable(constants.ST_BREAKPOINTS).add_breakpoint(path, line)
+
+
+@cui_source.with_current_file
+def add_breakpoint_to_buffer(path, line):
+    return add_breakpoint(path, line)
+
+
 @cui.init_func
 def initialize():
+    # Initialize Breakpoint Manager
+    breakpoints = Breakpoints()
+    cui.set_variable(constants.ST_BREAKPOINTS, breakpoints)
+    cui.set_local_key(cui_source.BaseFileBuffer, 'b', add_breakpoint_to_buffer)
+    cui_source.add_annotation_source(breakpoints)
+
+    # Initialize Debug Server
     srv = server.Server(Session, constants.ST_HOST, constants.ST_PORT)
     cui.set_variable(constants.ST_SERVER, srv)
     srv.start()
