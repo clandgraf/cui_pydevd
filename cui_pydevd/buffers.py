@@ -9,7 +9,7 @@ import cui_source
 import functools
 
 from cui_pydevd import constants
-
+from cui.util import truncate_left
 
 def with_thread(fn):
     @functools.wraps(fn)
@@ -249,8 +249,8 @@ class ThreadBuffer(ThreadBufferKeymap, cui.buffers.TreeBuffer):
                       'foreground': thread_state_col[item.state]},
                      ' %s' % item.name]]
         elif isinstance(item, cui_pydevd.D_Frame):
-            return [cui.buffers.pad_left(width,
-                                         '%s:%s' % (item.file, item.line))]
+            return [truncate_left(width,
+                                  '%s:%s' % (item.file, item.line))]
 
 
 class SessionBuffer(cui.buffers.ListBuffer):
