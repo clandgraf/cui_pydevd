@@ -7,9 +7,31 @@ import cui.keymap
 import cui_pydevd
 import cui_source
 import functools
+import itertools
 
 from cui_pydevd import constants
 from cui.util import truncate_left
+
+
+def with_session(fn):
+    @functools.wraps(fn)
+    def _fn(*args, **kwargs):
+        buf = cui.current_buffer()
+        session = None
+        try:
+            session = buf.session
+        except AttributeError:
+            try:
+                session = buf.thread.session
+            except AttributeError:
+                pass
+
+        if session:
+            return fn(session, *args, **kwargs)
+
+        return None
+    return _fn
+
 
 def with_thread(fn):
     @functools.wraps(fn)
@@ -29,6 +51,11 @@ def with_frame(fn):
         if frame:
             return fn(frame.thread, frame, *args, **kwargs)
     return _fn
+
+
+@with_session
+def py_display_session_breakpoints(session):
+    cui.buffer_visible(BreakpointBuffer, session)
 
 
 @with_thread
@@ -68,7 +95,8 @@ class ThreadBufferKeymap(cui.keymap.WithKeymap):
         '<f5>': py_step_into,
         '<f6>': py_step_over,
         '<f7>': py_step_return,
-        '<f8>': py_resume
+        '<f8>': py_resume,
+        'C-x b': py_display_session_breakpoints
     }
 
 class ThreadBufferMixin(ThreadBufferKeymap):
@@ -247,10 +275,66 @@ class ThreadBuffer(ThreadBufferKeymap, cui.buffers.TreeBuffer):
         if isinstance(item, cui_pydevd.D_Thread):
             return [[{'content':    '%s' % thread_state_str[item.state],
                       'foreground': thread_state_col[item.state]},
-                     ' %s' % item.name]]
+                     ' %s ' % item.name,
+                     {'content':    '(%s)' % item.id,
+                      'foreground': 'inactive'}]]
         elif isinstance(item, cui_pydevd.D_Frame):
             return [truncate_left(width,
                                   '%s:%s' % (item.file, item.line))]
+
+
+class BreakpointBuffer(cui.buffers.TreeBuffer):
+    """
+    Displays all breakpoints loaded in pydevd, as well as the
+    sessions for which they are and are not active.
+    """
+    @classmethod
+    def name(cls, session):
+        return ("pydevd Breakpoints %s"
+                % ('' if session is None else ('(%s)' % session)))
+
+    def __init__(self, session):
+        super(BreakpointBuffer, self).__init__(session)
+        self._session = session
+        self._breakpoints = cui.get_variable(constants.ST_BREAKPOINTS)
+
+    def is_expanded(self, item):
+        return True
+
+    def get_roots(self):
+        return self._breakpoints.paths()
+
+    def has_children(self, item):
+        return not (isinstance(item, tuple) and isinstance(item[1], bool))
+
+    def get_children(self, item):
+        # Files: str
+        if isinstance(item, str):
+            return list(zip(itertools.repeat(item),
+                            self._breakpoints.breakpoints(item)))
+        # Sessions
+        elif isinstance(item, tuple) and isinstance(item[1], bool):
+            return []
+        # Lines: (str, int) (only have children when no session is provided)
+        elif not self._session and isinstance(item, tuple) and isinstance(item[1], int):
+            return list(self._breakpoints.sessions(item[0], item[1]).items())
+
+        return []
+
+    def render_node(self, window, item, depth, width):
+        if isinstance(item, str):
+            return [item]
+        elif isinstance(item, tuple) and isinstance(item[1], bool):
+            return [{'content': item[0],
+                     'foreground': 'default' if item[1] else 'inactive'}]
+        elif isinstance(item, tuple) and isinstance(item[1], int):
+            active = self._session is None or self._breakpoints.sessions(item[0], item[1])[str(self._session)]
+            if self._session:
+                return [{'content': str(item[1] + 1),
+                         'foreground': ('default' if active \
+                                        else 'inactive')}]
+            else:
+                return [str(item[1] + 1)]
 
 
 class SessionBuffer(cui.buffers.ListBuffer):
@@ -265,7 +349,7 @@ class SessionBuffer(cui.buffers.ListBuffer):
         cui.switch_buffer(ThreadBuffer, self.selected_item())
 
     def on_pre_render(self):
-        self._flattened = list(cui.get_variable(constants.ST_SERVER).clients.values())
+        self._flattened = cui_pydevd.pydevd_sessions()
 
     def items(self):
         return self._flattened

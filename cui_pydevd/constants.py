@@ -17,6 +17,7 @@ ST_ON_SUSPEND =      ['pydevds', 'on-suspend']
 ST_ON_RESUME =       ['pydevds', 'on-resume']
 ST_ON_KILL_THREAD =  ['pydevds', 'on-kill-thread']
 ST_ON_KILL_SESSION = ['pydevds', 'on-kill-session']
+ST_FILE_MAPPING =    ['pydevds', 'file-mapping']
 ST_DEBUG_LOG =       ['logging', 'pydevds-comm']
 
 #####################
@@ -42,6 +43,10 @@ CMD_STEP_INTO = 107
 CMD_STEP_OVER = 108
 CMD_STEP_RETURN = 109
 CMD_GET_VAR = 110
+
+# CMD_SET_BREAK
+# -------------
+#
 CMD_SET_BREAK = 111
 CMD_REMOVE_BREAK = 112
 CMD_EVAL_EXPR = 113
@@ -49,8 +54,6 @@ CMD_GET_FRAME = 114
 
 # CMD_VERSION
 # -----------
-#
-# TODO implement CMD_VERSION
 #
 # Sent to debugger to initialize and request its version
 # If IDE_OS is omitted it defaults to 'WINDOWS', if

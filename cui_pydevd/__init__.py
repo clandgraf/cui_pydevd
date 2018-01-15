@@ -10,6 +10,7 @@ import os
 import socket
 
 from cui.tools import server
+from cui.tools import file_mapping
 from cui.util import find_index
 
 from cui_pydevd import buffers
@@ -23,10 +24,11 @@ cui.def_foreground('string',          'green')
 cui.def_foreground('string_escape',   'yellow')
 cui.def_foreground('string_interpol', 'yellow')
 
-cui.def_variable(constants.ST_HOST,      'localhost')
-cui.def_variable(constants.ST_PORT,      4040)
-cui.def_variable(constants.ST_SERVER,    None)
-cui.def_variable(constants.ST_DEBUG_LOG, False)
+cui.def_variable(constants.ST_HOST,         'localhost')
+cui.def_variable(constants.ST_PORT,         4040)
+cui.def_variable(constants.ST_SERVER,       None)
+cui.def_variable(constants.ST_DEBUG_LOG,    False)
+cui.def_variable(constants.ST_FILE_MAPPING, file_mapping.FileMapping())
 
 cui.def_hook(constants.ST_ON_SET_FRAME)
 cui.def_hook(constants.ST_ON_SUSPEND)
@@ -42,9 +44,11 @@ class Command(object):
         self.payload = payload
 
     @staticmethod
-    def from_string(s):
+    def from_string(file_mapping, s):
         command, sequence_no, payload_raw = s.split('\t', 2)
-        return Command(int(command), int(sequence_no), payload.create_payload(int(command), payload_raw))
+        return Command(int(command),
+                       int(sequence_no),
+                       payload.create_payload(file_mapping, int(command), payload_raw))
 
 
 class ResponseReader(object):
@@ -68,7 +72,8 @@ class ResponseReader(object):
                 response, self._read_buffer = self._read_buffer.split('\n', 1)
                 if cui.get_variable(constants.ST_DEBUG_LOG):
                     cui.message('=== Received response: \n%s' % (response,))
-                responses.append(Command.from_string(response))
+                responses.append(Command.from_string(self.session._file_mapping,
+                                                     response))
         except socket.error as e:
             if e.args[0] not in [errno.EAGAIN, errno.EWOULDBLOCK]:
                 raise e
@@ -92,9 +97,11 @@ class D_Thread(object):
             cui.buffer_visible(buffers.ThreadBuffer, self.session,
                                split_method=None)
             cui.buffer_visible(buffers.CodeBuffer, self,
-                               split_method=cui.split_window_below)
-            cui.buffer_visible(buffers.FrameBuffer, self,
                                split_method=cui.split_window_right)
+            cui.buffer_visible(buffers.FrameBuffer, self,
+                               split_method=cui.split_window_below)
+            cui.buffer_visible(buffers.BreakpointBuffer, self.session,
+                               split_method=cui.split_window_below)
 
     def step_into(self):
         self.session.send_command(constants.CMD_STEP_INTO, self.id)
@@ -251,11 +258,30 @@ class Session(server.Session):
         self.threads = collections.OrderedDict()
         self._response_reader = ResponseReader(self)
         self._sequence_no = 1
+        self._file_mapping = cui.get_variable(constants.ST_FILE_MAPPING).copy()
+
+        cui.get_variable(constants.ST_BREAKPOINTS).add_session(self)
 
         # Initialize debugger, load threads, start process
-        self.send_command(constants.CMD_VERSION, 'WINDOWS\tID')
+        self.send_command(constants.CMD_VERSION, 'cui\tWINDOWS\tLINE')
         self.send_command(constants.CMD_LIST_THREADS)
         self.send_command(constants.CMD_RUN)
+
+    def load_settings(path):
+        settings_raw = {}
+        with open(path, 'r') as f:
+            settings_raw = json.load(f)
+            self._file_mapping = settings_raw.get('file-mapping')
+
+    def set_line_breakpoint(self, path, line):
+        self.send_command(constants.CMD_SET_BREAK,
+                          '\t'.join(['python-line',
+                                     self._file_mapping.to_other(path),
+                                     str(line + 1),
+                                     'None',
+                                     'THREAD',
+                                     'None',
+                                     'None']))
 
     def check_debugger_version(self, version):
         cui.message('pydevd version (%s): %s' % (self, version))
@@ -309,10 +335,13 @@ class Session(server.Session):
         elif response.command == constants.CMD_EVAL_EXPR:
             for thread in self.threads.values():
                 thread.on_eval(response.sequence_no, response.payload)
+        elif response.command == constants.CMD_ERROR:
+            cui.message(response.payload)
         else:
             cui.message('Unhandled response from pydevd: %s' % response.command)
 
     def close(self):
+        cui.get_variable(constants.ST_BREAKPOINTS).remove_session(self)
         for thread in self.threads.values():
             thread.close()
         cui.kill_buffer(buffers.ThreadBuffer, self)
@@ -320,14 +349,28 @@ class Session(server.Session):
         super(Session, self).close()
 
 
-class Breakpoints(cui_source.AnnotationSource):
+def pydevd_sessions():
+    return list(cui.get_variable(constants.ST_SERVER).clients.values())
+
+
+class _Breakpoints(cui_source.AnnotationSource):
     MARKER = 'B'
+
+    @staticmethod
+    def breakpoint_id(path, line):
+        return '%s?%s' % (path, line)
 
     def __init__(self):
         self._breakpoints = {}
+        self._pydevd_ids = {}
+        self._pydevd_id_counter = 0
+        self._active_map = {}
 
     def handles_file(self, path):
         return os.path.splitext(path)[1] == '.py'
+
+    def paths(self):
+        return list(self._breakpoints.keys())
 
     def get_annotations(self, path, first_line, length):
         breakpoints = self._breakpoints.get(path, [])
@@ -339,15 +382,66 @@ class Breakpoints(cui_source.AnnotationSource):
                                default_index=len(breakpoints))
         return breakpoints[start_index:end_index]
 
+    def add_session(self, session):
+        """
+        Add a session entry for all existing breakpoints
+        """
+        for path, lines in self._breakpoints.items():
+            for line in lines:
+                self._active_map[self.breakpoint_id(path, line)][str(session)] = False
+
+    def remove_session(self, session):
+        """
+        Remove session entry for all existing breakpoints
+        """
+        for path, lines in self._breakpoints.items():
+            for line in lines:
+                del self._active_map[self.breakpoint_id(path, line)][str(session)]
+
     def add_breakpoint(self, path, line):
         if path not in self._breakpoints:
             self._breakpoints[path] = []
+        if line in self._breakpoints[path]:
+            return
+
         self._breakpoints[path].append(line)
         self._breakpoints[path].sort()
+
+        # Activation Entries for breakpoint
+
+        self._active_map[self.breakpoint_id(path, line)] = {}
+        self._pydevd_ids[self.breakpoint_id(path, line)] = self._pydevd_id_counter
+        self._pydevd_id_counter += 1
+        for session in pydevd_sessions():
+            self._active_map[self.breakpoint_id(path, line)][str(session)] = False
+            session.set_line_breakpoint(path, line)
+
+    def pydevd_id(self, path, line):
+        return self._pydevd_ids.get(self.breakpoint_id(path, line))
+
+    def breakpoints(self, path):
+        return self._breakpoints[path]
+
+    def sessions(self, path, line):
+        return self._active_map[self.breakpoint_id(path, line)]
+
+    def remove_breakpoint(self, path, line):
+        del self._active_map[self.breakpoint_id(path, line)]
+        del self._breakpoints[path][line]
+        if len(self._breakpoints[path]) == 0:
+            del self._breakpoints[path]
 
 
 def add_breakpoint(path, line):
     return cui.get_variable(constants.ST_BREAKPOINTS).add_breakpoint(path, line)
+
+
+def remove_breakpoint(path, line):
+    return cui.get_variable(constants.ST_BREAKPOINTS).remove_breakpoint(path, line)
+
+
+def pydevd_id(path, line):
+    return cui.get_variable(constants.ST_BREAKPOINTS).pydevd_id(path, line)
 
 
 @cui_source.with_current_file
@@ -358,7 +452,7 @@ def add_breakpoint_to_buffer(path, line):
 @cui.init_func
 def initialize():
     # Initialize Breakpoint Manager
-    breakpoints = Breakpoints()
+    breakpoints = _Breakpoints()
     cui.set_variable(constants.ST_BREAKPOINTS, breakpoints)
     cui.set_local_key(cui_source.BaseFileBuffer, 'b', add_breakpoint_to_buffer)
     cui_source.add_annotation_source(breakpoints)
@@ -368,4 +462,8 @@ def initialize():
     cui.set_variable(constants.ST_SERVER, srv)
     srv.start()
 
-    cui.buffer_visible(buffers.SessionBuffer)
+    if not cui.has_window_set('pydevds'):
+        cui.new_window_set('pydevds')
+        cui.buffer_visible(buffers.BreakpointBuffer, None,
+                           split_method=cui.split_window_right)
+        cui.buffer_visible(buffers.SessionBuffer)
