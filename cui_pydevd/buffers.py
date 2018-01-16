@@ -289,9 +289,6 @@ class ThreadBuffer(ThreadBufferKeymap, cui.buffers.TreeBuffer):
                                   '%s:%s' % (item.file, item.line))]
 
 
-def remove_breakpoint(path, line):
-
-
 class BreakpointBuffer(cui.buffers.TreeBuffer):
     """
     Displays all breakpoints loaded in pydevd, as well as the
