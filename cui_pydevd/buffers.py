@@ -13,24 +13,30 @@ from cui_pydevd import constants
 from cui.util import truncate_left
 
 
-def with_session(fn):
-    @functools.wraps(fn)
-    def _fn(*args, **kwargs):
-        buf = cui.current_buffer()
-        session = None
-        try:
-            session = buf.session
-        except AttributeError:
+def _with_session_raw(optional):
+    def _with_session(fn):
+        @functools.wraps(fn)
+        def _fn(*args, **kwargs):
+            buf = cui.current_buffer()
+            session = None
             try:
-                session = buf.thread.session
+                session = buf.session
             except AttributeError:
-                pass
+                try:
+                    session = buf.thread.session
+                except AttributeError:
+                    pass
 
-        if session:
-            return fn(session, *args, **kwargs)
+            if session or optional:
+                return fn(session, *args, **kwargs)
 
-        return None
-    return _fn
+            return None
+        return _fn
+    return _with_session
+
+
+with_session = _with_session_raw(optional=False)
+with_optional_session = _with_session_raw(optional=True)
 
 
 def with_thread(fn):
@@ -283,6 +289,9 @@ class ThreadBuffer(ThreadBufferKeymap, cui.buffers.TreeBuffer):
                                   '%s:%s' % (item.file, item.line))]
 
 
+def remove_breakpoint(path, line):
+
+
 class BreakpointBuffer(cui.buffers.TreeBuffer):
     """
     Displays all breakpoints loaded in pydevd, as well as the
@@ -330,7 +339,7 @@ class BreakpointBuffer(cui.buffers.TreeBuffer):
         elif isinstance(item, tuple) and isinstance(item[1], int):
             active = self._session is None or self._breakpoints.sessions(item[0], item[1])[str(self._session)]
             if self._session:
-                return [{'content': str(item[1] + 1),
+                return [{'content': '[%s] %s' % ('!' if active else ' ', str(item[1] + 1)),
                          'foreground': ('default' if active \
                                         else 'inactive')}]
             else:

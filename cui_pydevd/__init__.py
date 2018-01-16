@@ -6,6 +6,7 @@ import collections
 import cui
 import cui_source
 import errno
+import json
 import os
 import socket
 
@@ -29,6 +30,7 @@ cui.def_variable(constants.ST_PORT,         4040)
 cui.def_variable(constants.ST_SERVER,       None)
 cui.def_variable(constants.ST_DEBUG_LOG,    False)
 cui.def_variable(constants.ST_FILE_MAPPING, file_mapping.FileMapping())
+cui.def_variable(constants.ST_SERIALIZE_BREAKPOINTS, True)
 
 cui.def_hook(constants.ST_ON_SET_FRAME)
 cui.def_hook(constants.ST_ON_SUSPEND)
@@ -273,15 +275,28 @@ class Session(server.Session):
             settings_raw = json.load(f)
             self._file_mapping = settings_raw.get('file-mapping')
 
-    def set_line_breakpoint(self, path, line):
-        self.send_command(constants.CMD_SET_BREAK,
-                          '\t'.join(['python-line',
-                                     self._file_mapping.to_other(path),
-                                     str(line + 1),
-                                     'None',
-                                     'THREAD',
-                                     'None',
-                                     'None']))
+    def toggle_breakpoint(self, path, line, activate=True):
+        active_map = cui.get_variable(constants.ST_BREAKPOINTS) \
+                        ._active_map[_Breakpoints.breakpoint_id(path, line)]
+        is_active = active_map.get(str(self), False)
+        if is_active:
+            self.send_command(constants.CMD_REMOVE_BREAK,
+                              '\t'.join(['python-line',
+                                         self._file_mapping.to_other(path),
+                                         str(line + 1)]))
+            active_map[str(self)] = False
+        elif not is_active and activate:
+            self.send_command(constants.CMD_SET_BREAK,
+                              '\t'.join(['python-line',
+                                         self._file_mapping.to_other(path),
+                                         str(line + 1),
+                                         'None',
+                                         'THREAD',
+                                         'None',
+                                         'None']))
+            active_map[str(self)] = True
+        else:
+            active_map[str(self)] = is_active
 
     def check_debugger_version(self, version):
         cui.message('pydevd version (%s): %s' % (self, version))
@@ -366,6 +381,27 @@ class _Breakpoints(cui_source.AnnotationSource):
         self._pydevd_id_counter = 0
         self._active_map = {}
 
+        # Load serializes breakpoints
+        self._read_breakpoints()
+        cui.add_exit_handler(self._write_breakpoints)
+
+    def _read_breakpoints(self):
+        if cui.get_variable(constants.ST_SERIALIZE_BREAKPOINTS):
+            try:
+                with open(cui.user_directory('pydevd_breaks.json'), 'r') as f:
+                    for entry in json.load(f):
+                        path = entry['path']
+                        for line in entry['lines']:
+                            self.add_breakpoint(path, line)
+            except IOError:
+                pass
+
+    def _write_breakpoints(self):
+        if cui.get_variable(constants.ST_SERIALIZE_BREAKPOINTS):
+            with open(cui.user_directory('pydevd_breaks.json'), 'w') as f:
+                json.dump([{'path': path, 'lines': lines}
+                           for path, lines in self._breakpoints.items()], f)
+
     def handles_file(self, path):
         return os.path.splitext(path)[1] == '.py'
 
@@ -384,37 +420,36 @@ class _Breakpoints(cui_source.AnnotationSource):
 
     def add_session(self, session):
         """
-        Add a session entry for all existing breakpoints
+        Add a session entry for all existing breakpoints. This should
+        only be called by Session class.
         """
         for path, lines in self._breakpoints.items():
             for line in lines:
-                self._active_map[self.breakpoint_id(path, line)][str(session)] = False
+                session.toggle_breakpoint(path, line, activate=False)
 
     def remove_session(self, session):
         """
-        Remove session entry for all existing breakpoints
+        Remove session entry for all existing breakpoints. This should
+        only be called by Session class.
         """
         for path, lines in self._breakpoints.items():
             for line in lines:
                 del self._active_map[self.breakpoint_id(path, line)][str(session)]
 
-    def add_breakpoint(self, path, line):
+    def add_breakpoint(self, path, line, activate=False):
+        # Create Breakpoint if it does not exist
         if path not in self._breakpoints:
             self._breakpoints[path] = []
-        if line in self._breakpoints[path]:
-            return
+        if line not in self._breakpoints[path]:
+            self._breakpoints[path].append(line)
+            self._breakpoints[path].sort()
 
-        self._breakpoints[path].append(line)
-        self._breakpoints[path].sort()
+            self._pydevd_ids[self.breakpoint_id(path, line)] = self._pydevd_id_counter
+            self._pydevd_id_counter += 1
 
-        # Activation Entries for breakpoint
-
-        self._active_map[self.breakpoint_id(path, line)] = {}
-        self._pydevd_ids[self.breakpoint_id(path, line)] = self._pydevd_id_counter
-        self._pydevd_id_counter += 1
-        for session in pydevd_sessions():
-            self._active_map[self.breakpoint_id(path, line)][str(session)] = False
-            session.set_line_breakpoint(path, line)
+            self._active_map[self.breakpoint_id(path, line)] = {}
+            for session in pydevd_sessions():
+                session.toggle_breakpoint(path, line, activate=activate)
 
     def pydevd_id(self, path, line):
         return self._pydevd_ids.get(self.breakpoint_id(path, line))
@@ -426,18 +461,36 @@ class _Breakpoints(cui_source.AnnotationSource):
         return self._active_map[self.breakpoint_id(path, line)]
 
     def remove_breakpoint(self, path, line):
-        del self._active_map[self.breakpoint_id(path, line)]
-        del self._breakpoints[path][line]
-        if len(self._breakpoints[path]) == 0:
-            del self._breakpoints[path]
+        # Disable breakpoint in all sessions
+        active_map = self._active_map[self.breakpoint_id(path, line)]
+        for session in pydevd_sessions():
+            if active_map[str(session)]:
+                session.toggle_breakpoint(path, line)
+
+        # Remove bookkeeping data
+        if path in self._breakpoints and line in self._breakpoints[path]:
+            del self._active_map[self.breakpoint_id(path, line)]
+            del self._pydevd_ids[self.breakpoint_id(path, line)]
+            del self._breakpoints[path][line]
+            if len(self._breakpoints[path]) == 0:
+                del self._breakpoints[path]
 
 
-def add_breakpoint(path, line):
-    return cui.get_variable(constants.ST_BREAKPOINTS).add_breakpoint(path, line)
-
+def toggle_breakpoint(session, path, line):
+    cui.get_variable(constants.ST_BREAKPOINTS) \
+       .add_breakpoint(path, line, activate=(session is None))
+    if session:
+        return session.toggle_breakpoint(path, line)
 
 def remove_breakpoint(path, line):
-    return cui.get_variable(constants.ST_BREAKPOINTS).remove_breakpoint(path, line)
+    return cui.get_variable(constants.ST_BREAKPOINTS) \
+              .remove_breakpoint(path, line)
+
+
+def remove_breakpoints(path):
+    breakpoints =  cui.get_variable(constants.ST_BREAKPOINTS)
+    for line in list(breakpoints.breakpoints(path)):
+        breakpoints.remove_breakpoint(path, line)
 
 
 def pydevd_id(path, line):
@@ -445,25 +498,47 @@ def pydevd_id(path, line):
 
 
 @cui_source.with_current_file
-def add_breakpoint_to_buffer(path, line):
-    return add_breakpoint(path, line)
+@buffers.with_optional_session
+def toggle_breakpoint_in_current_file(session, path, line):
+    """
+    This command creates a breakpoint on the highlighted line.
+    If the buffer has a session association, this
+    command switches the breakpoint active or inactive in the current
+    session.  The buffer must have a file association, i.e. a property
+    ``_file_path`` must be defined for it. Optionally, the buffer may
+    have a session association.
+    """
+    return toggle_breakpoint(session, path, line)
+
+
+@cui_source.with_current_file
+def remove_breakpoint_in_current_file(path, line):
+    """
+    Remove the breakpoint defined on the current line in the current
+    file from the debugger. The buffer must have a file association,
+    i.e. a property ``_file_path`` must be defined for it.
+    """
+    return remove_breakpoint(session, path, line)
 
 
 @cui.init_func
 def initialize():
-    # Initialize Breakpoint Manager
-    breakpoints = _Breakpoints()
-    cui.set_variable(constants.ST_BREAKPOINTS, breakpoints)
-    cui.set_local_key(cui_source.BaseFileBuffer, 'b', add_breakpoint_to_buffer)
-    cui_source.add_annotation_source(breakpoints)
-
     # Initialize Debug Server
     srv = server.Server(Session, constants.ST_HOST, constants.ST_PORT)
     cui.set_variable(constants.ST_SERVER, srv)
-    srv.start()
 
+    # Initialize Breakpoints
+    breakpoints = _Breakpoints()
+    cui.set_variable(constants.ST_BREAKPOINTS, breakpoints)
+    cui.set_local_key(cui_source.BaseFileBuffer, 'b', toggle_breakpoint_in_current_file)
+    cui.set_local_key(cui_source.BaseFileBuffer, 'r', remove_breakpoint_in_current_file)
+    cui_source.add_annotation_source(breakpoints)
+
+    # Initialize Layout
     if not cui.has_window_set('pydevds'):
         cui.new_window_set('pydevds')
         cui.buffer_visible(buffers.BreakpointBuffer, None,
                            split_method=cui.split_window_right)
         cui.buffer_visible(buffers.SessionBuffer)
+
+    srv.start()

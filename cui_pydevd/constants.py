@@ -8,17 +8,18 @@ WINDOW_SET_NAME = 'pydevd'
 ## cui Variable Names
 ######################
 
-ST_HOST =            ['pydevds', 'host']
-ST_PORT =            ['pydevds', 'port']
-ST_SERVER =          ['pydevds', 'debugger']
-ST_BREAKPOINTS =     ['pydevds', 'breakpoints']
-ST_ON_SET_FRAME =    ['pydevds', 'on-set-frame']
-ST_ON_SUSPEND =      ['pydevds', 'on-suspend']
-ST_ON_RESUME =       ['pydevds', 'on-resume']
-ST_ON_KILL_THREAD =  ['pydevds', 'on-kill-thread']
-ST_ON_KILL_SESSION = ['pydevds', 'on-kill-session']
-ST_FILE_MAPPING =    ['pydevds', 'file-mapping']
-ST_DEBUG_LOG =       ['logging', 'pydevds-comm']
+ST_HOST =                  ['pydevds', 'host']
+ST_PORT =                  ['pydevds', 'port']
+ST_SERVER =                ['pydevds', 'debugger']
+ST_BREAKPOINTS =           ['pydevds', 'breakpoints']
+ST_ON_SET_FRAME =          ['pydevds', 'on-set-frame']
+ST_ON_SUSPEND =            ['pydevds', 'on-suspend']
+ST_ON_RESUME =             ['pydevds', 'on-resume']
+ST_ON_KILL_THREAD =        ['pydevds', 'on-kill-thread']
+ST_ON_KILL_SESSION =       ['pydevds', 'on-kill-session']
+ST_FILE_MAPPING =          ['pydevds', 'file-mapping']
+ST_SERIALIZE_BREAKPOINTS = ['pydevds', 'serialize-breakpoints']
+ST_DEBUG_LOG =             ['logging', 'pydevds-comm']
 
 #####################
 ## Debugger Commands
@@ -48,6 +49,22 @@ CMD_GET_VAR = 110
 # -------------
 #
 CMD_SET_BREAK = 111
+
+# CMD_REMOVE_BREAK
+# ----------------
+#
+# Remove a breakpoint from a file
+#
+# Payload:
+#
+#   111/t<SEQ_NO>\t<TYPE>\t<FILE>\t<ID>
+#
+# Variables:
+#
+#   <SEQ_NO> -> Debugger Sequence Number
+#   <TYPE> -> Breakpoint type (we support only 'python-line')
+#   <FILE> -> The path to the file in which to set the breakpoint
+#
 CMD_REMOVE_BREAK = 112
 CMD_EVAL_EXPR = 113
 CMD_GET_FRAME = 114
