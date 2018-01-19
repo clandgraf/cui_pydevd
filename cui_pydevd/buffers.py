@@ -289,7 +289,56 @@ class ThreadBuffer(ThreadBufferKeymap, cui.buffers.TreeBuffer):
                                   '%s:%s' % (item.file, item.line))]
 
 
-class BreakpointBuffer(cui.buffers.TreeBuffer):
+class BreakpointFileHandler(cui.buffers.NodeHandler(is_expanded_=True, has_children_=True)):
+    def __init__(self, session, *args, **kwargs):
+        super(BreakpointFileHandler, self).__init__(session, *args, **kwargs)
+        self._breakpoints = cui.get_variable(constants.ST_BREAKPOINTS)
+
+    def matches(self, item):
+        return isinstance(item, str)
+
+    def get_children(self, item):
+        return list(zip(itertools.repeat(item),
+                        self._breakpoints.breakpoints(item)))
+
+    def render(self, window, item, depth, width):
+        return [item]
+
+
+class BreakpointLineHandler(cui.buffers.NodeHandler(is_expanded_=True, has_children_=True)):
+    def __init__(self, session, *args, **kwargs):
+        super(BreakpointLineHandler, self).__init__(session, *args, **kwargs)
+        self._session = session
+
+    def matches(self, item):
+        return isinstance(item, tuple) and type(item[1]) is int
+
+    def get_children(self, item):
+        return list(self._breakpoints.sessions(item[0], item[1]).items()) if self._session else []
+
+    def render(self, window, item, depth, width):
+        active = self._session is None or self._breakpoints.sessions(item[0], item[1])[str(self._session)]
+        if self._session:
+            return [{'content': '[%s] %s' % ('!' if active else ' ', str(item[1] + 1)),
+                     'foreground': ('default' if active \
+                                    else 'inactive')}]
+        else:
+            return [str(item[1] + 1)]
+
+
+class BreakpointSessionHandler(cui.buffers.NodeHandler(is_expanded_=True)):
+    def matches(self, item):
+        return isinstance(item, tuple) and type(item[1]) is bool
+
+    def render(self, window, item, depth, width):
+        return [{'content': item[0],
+                 'foreground': 'default' if item[1] else 'inactive'}]
+
+
+@cui.buffers.node_handlers(BreakpointFileHandler,
+                           BreakpointLineHandler,
+                           BreakpointSessionHandler)
+class BreakpointBuffer(cui.buffers.DefaultTreeBuffer):
     """
     Displays all breakpoints loaded in pydevd, as well as the
     sessions for which they are and are not active.
@@ -304,43 +353,8 @@ class BreakpointBuffer(cui.buffers.TreeBuffer):
         self._session = session
         self._breakpoints = cui.get_variable(constants.ST_BREAKPOINTS)
 
-    def is_expanded(self, item):
-        return True
-
     def get_roots(self):
         return self._breakpoints.paths()
-
-    def has_children(self, item):
-        return not (isinstance(item, tuple) and isinstance(item[1], bool))
-
-    def get_children(self, item):
-        # Files: str
-        if isinstance(item, str):
-            return list(zip(itertools.repeat(item),
-                            self._breakpoints.breakpoints(item)))
-        # Sessions
-        elif isinstance(item, tuple) and isinstance(item[1], bool):
-            return []
-        # Lines: (str, int) (only have children when no session is provided)
-        elif not self._session and isinstance(item, tuple) and isinstance(item[1], int):
-            return list(self._breakpoints.sessions(item[0], item[1]).items())
-
-        return []
-
-    def render_node(self, window, item, depth, width):
-        if isinstance(item, str):
-            return [item]
-        elif isinstance(item, tuple) and isinstance(item[1], bool):
-            return [{'content': item[0],
-                     'foreground': 'default' if item[1] else 'inactive'}]
-        elif isinstance(item, tuple) and isinstance(item[1], int):
-            active = self._session is None or self._breakpoints.sessions(item[0], item[1])[str(self._session)]
-            if self._session:
-                return [{'content': '[%s] %s' % ('!' if active else ' ', str(item[1] + 1)),
-                         'foreground': ('default' if active \
-                                        else 'inactive')}]
-            else:
-                return [str(item[1] + 1)]
 
 
 class SessionBuffer(cui.buffers.ListBuffer):
