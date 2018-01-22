@@ -78,7 +78,7 @@ class ThreadBufferKeymap(cui.keymap.WithKeymap):
 
 class ThreadBufferMixin(ThreadBufferKeymap):
     @classmethod
-    def name(cls, thread):
+    def name(cls, thread, **kwargs):
         return ('%s (%s:%s/%s)'
                 % (cls.__buffer_name__,
                    thread.session.address[0],
@@ -203,7 +203,7 @@ class ThreadBuffer(ThreadBufferKeymap, cui.buffers.TreeBuffer):
     }
 
     @classmethod
-    def name(cls, session):
+    def name(cls, session, **kwargs):
         return 'pydevd Threads(%s:%s)' % session.address
 
     def __init__(self, session):

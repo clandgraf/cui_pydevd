@@ -112,7 +112,7 @@ class BreakpointBuffer(cui.buffers.DefaultTreeBuffer):
     }
 
     @classmethod
-    def name(cls, session):
+    def name(cls, session, **kwargs):
         return ("pydevd Breakpoints %s"
                 % ('' if session is None else ('(%s)' % session)))
 
@@ -139,7 +139,7 @@ class SessionBuffer(cui.buffers.ListBuffer):
     Display a list of active pydevd sessions.
     """
     @classmethod
-    def name(cls):
+    def name(cls, **kwargs):
         return "pydevd Sessions"
 
     def on_item_selected(self):
