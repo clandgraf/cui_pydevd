@@ -72,6 +72,13 @@ class BreakpointLineHandler(cui.buffers.NodeHandler(is_expanded_=True, has_child
         else:
             return [str(item[1] + 1)]
 
+    def toggle(self, item):
+        if self._session:
+            cui_pydevd.toggle_breakpoint(self._session, item[0], item[1])
+
+    def remove(self, item):
+        cui_pydevd.remove_breakpoint(item[0], item[1])
+
 
 class BreakpointSessionHandler(cui.buffers.NodeHandler(is_expanded_=True)):
     def matches(self, item):
@@ -80,6 +87,10 @@ class BreakpointSessionHandler(cui.buffers.NodeHandler(is_expanded_=True)):
     def render(self, window, item, depth, width):
         return [{'content': item[0],
                  'foreground': 'default' if item[1] else 'inactive'}]
+
+    def toggle(self, item):
+        # TODO need breakpoint data
+        pass
 
 
 @cui.buffers.node_handlers(BreakpointFileHandler,
@@ -94,6 +105,12 @@ class BreakpointBuffer(cui.buffers.DefaultTreeBuffer):
     If this buffer is opened in the context of a session, the
     sessions will not be displayed.
     """
+
+    __keymap__ = {
+        'b': cui.buffers.invoke_node_handler('toggle'),
+        'r': cui.buffers.invoke_node_handler('remove')
+    }
+
     @classmethod
     def name(cls, session):
         return ("pydevd Breakpoints %s"
@@ -108,7 +125,7 @@ class BreakpointBuffer(cui.buffers.DefaultTreeBuffer):
         return self._breakpoints.paths()
 
 
-def py_display_all_breakpoints(session):
+def py_display_all_breakpoints():
     cui.buffer_visible(BreakpointBuffer, None)
 
 
