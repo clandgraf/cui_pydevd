@@ -51,6 +51,11 @@ class BreakpointFileHandler(cui.buffers.NodeHandler(is_expanded_=True, has_child
         return [item]
 
 
+def with_checkbox(item, active):
+    return [{'content': '[%s] %s' % ('!' if active else ' ', item),
+             'foreground': 'default' if active else 'inactive'}]
+
+
 class BreakpointLineHandler(cui.buffers.NodeHandler(is_expanded_=True, has_children_=True)):
     def __init__(self, session, *args, **kwargs):
         super(BreakpointLineHandler, self).__init__(session, *args, **kwargs)
@@ -61,14 +66,15 @@ class BreakpointLineHandler(cui.buffers.NodeHandler(is_expanded_=True, has_child
         return isinstance(item, tuple) and type(item[1]) is int
 
     def get_children(self, item):
-        return [] if self._session else list(self._breakpoints.sessions(item[0], item[1]).items())
+        return [] if self._session else [
+            (session[0], session[1], item[0], item[1])
+            for session in self._breakpoints.sessions(item[0], item[1]).items()
+        ]
 
     def render(self, window, item, depth, width):
         active = self._session is None or self._breakpoints.sessions(item[0], item[1])[str(self._session)]
         if self._session:
-            return [{'content': '[%s] %s' % ('!' if active else ' ', str(item[1] + 1)),
-                     'foreground': ('default' if active \
-                                    else 'inactive')}]
+            return with_checkbox(str(item[1] + 1), active)
         else:
             return [str(item[1] + 1)]
 
@@ -85,12 +91,10 @@ class BreakpointSessionHandler(cui.buffers.NodeHandler(is_expanded_=True)):
         return isinstance(item, tuple) and type(item[1]) is bool
 
     def render(self, window, item, depth, width):
-        return [{'content': item[0],
-                 'foreground': 'default' if item[1] else 'inactive'}]
+        return with_checkbox(item[0], item[1])
 
     def toggle(self, item):
-        # TODO need breakpoint data
-        pass
+        cui_pydevd.toggle_breakpoint(cui_pydevd.pydevd_session(item[0]), item[2], item[3])
 
 
 @cui.buffers.node_handlers(BreakpointFileHandler,

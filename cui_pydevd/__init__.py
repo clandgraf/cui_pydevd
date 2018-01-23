@@ -368,6 +368,10 @@ def pydevd_sessions():
     return list(cui.get_variable(constants.ST_SERVER).clients.values())
 
 
+def pydevd_session(session_id):
+    return cui.get_variable(constants.ST_SERVER).clients_by_name[session_id]
+
+
 class _Breakpoints(cui_source.AnnotationSource):
     MARKER = 'B'
 
