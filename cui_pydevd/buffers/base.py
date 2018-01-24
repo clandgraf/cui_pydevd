@@ -4,9 +4,11 @@
 
 import cui
 import cui_pydevd
+import cui_source
 import functools
 import itertools
 
+from cui_pydevd import buffers
 from cui_pydevd import constants
 
 def _with_session_raw(optional):
@@ -50,6 +52,9 @@ class BreakpointFileHandler(cui.buffers.NodeHandler(is_expanded_=True, has_child
     def render(self, window, item, depth, width):
         return [item]
 
+    def goto(self, item):
+        cui.buffer_visible(cui_source.FileBuffer, item)
+
 
 def with_checkbox(item, active):
     return [{'content': '[%s] %s' % ('!' if active else ' ', item),
@@ -85,6 +90,27 @@ class BreakpointLineHandler(cui.buffers.NodeHandler(is_expanded_=True, has_child
     def remove(self, item):
         cui_pydevd.remove_breakpoint(item[0], item[1])
 
+    def goto(self, item):
+        # If we are in session context, and a CodeBuffer of that session is
+        # currently visible, we use this.
+        if self._session:
+            def is_appropriate(b):
+                return
+
+            code_buffers = cui.get_buffers(buffers.CodeBuffer,
+                                           lambda b: b.thread.session == self._session)
+            for code_buffer in code_buffers:
+                window = cui.buffer_window(code_buffer, current_window_set=True)
+                if window:
+                    code_buffers[0].set_file(item[0])
+                    with cui.window_selected(window):
+                        cui.goto_item_in_buffer(code_buffers[0], item[1])
+                    return
+
+        # Else open a FileBuffer
+        cui.exec_in_buffer_visible(lambda b: cui.goto_item_in_buffer(b, item[1]),
+                                   cui_source.FileBuffer, item[0])
+
 
 class BreakpointSessionHandler(cui.buffers.NodeHandler(is_expanded_=True)):
     def matches(self, item):
@@ -112,7 +138,8 @@ class BreakpointBuffer(cui.buffers.DefaultTreeBuffer):
 
     __keymap__ = {
         'b': cui.buffers.invoke_node_handler('toggle'),
-        'r': cui.buffers.invoke_node_handler('remove')
+        'r': cui.buffers.invoke_node_handler('remove'),
+        '<enter>': cui.buffers.invoke_node_handler('goto')
     }
 
     @classmethod

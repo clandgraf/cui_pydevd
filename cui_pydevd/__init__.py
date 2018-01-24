@@ -441,7 +441,12 @@ class _Breakpoints(cui_source.AnnotationSource):
                 del self._active_map[self.breakpoint_id(path, line)][str(session)]
 
     def add_breakpoint(self, path, line, activate=False):
-        # Create Breakpoint if it does not exist
+        """
+        Add a breakpoint at path?line if it does not exist.
+
+        If ``activate`` is set, the breakpoint will be activated for
+        all registered sessions.
+        """
         if path not in self._breakpoints:
             self._breakpoints[path] = []
         if line not in self._breakpoints[path]:
@@ -475,7 +480,7 @@ class _Breakpoints(cui_source.AnnotationSource):
         if path in self._breakpoints and line in self._breakpoints[path]:
             del self._active_map[self.breakpoint_id(path, line)]
             del self._pydevd_ids[self.breakpoint_id(path, line)]
-            del self._breakpoints[path][line]
+            self._breakpoints[path].remove(line)
             if len(self._breakpoints[path]) == 0:
                 del self._breakpoints[path]
 
