@@ -5,10 +5,8 @@
 import collections
 import cui
 import cui_source
-import errno
 import json
 import os
-import socket
 
 from cui.tools import server
 from cui.tools import file_mapping
@@ -51,36 +49,6 @@ class Command(object):
         return Command(int(command),
                        int(sequence_no),
                        payload.create_payload(file_mapping, int(command), payload_raw))
-
-
-class ResponseReader(object):
-    def __init__(self, session):
-        self.session = session
-        self._read_buffer = ''
-
-    def read_responses(self):
-        responses = []
-        try:
-            r = self.session.socket.recv(4096)
-
-            if len(r) == 0:
-                cui.message('Debugger ended connection')
-                if len(self._read_buffer) > 0:
-                    cui.message('Received incomplete message: %s' % self._read_buffer)
-                raise server.ConnectionTerminated('received 0 bytes')
-
-            self._read_buffer += r.decode('utf-8')
-            while self._read_buffer.find('\n') != -1:
-                response, self._read_buffer = self._read_buffer.split('\n', 1)
-                if cui.get_variable(constants.ST_DEBUG_LOG):
-                    cui.message('=== Received response: \n%s' % (response,))
-                responses.append(Command.from_string(self.session._file_mapping,
-                                                     response))
-        except socket.error as e:
-            if e.args[0] not in [errno.EAGAIN, errno.EWOULDBLOCK]:
-                raise e
-
-        return responses
 
 
 class D_Thread(object):
@@ -254,11 +222,10 @@ class D_Frame(object):
         variable['pending'] = None
 
 
-class Session(server.Session):
+class Session(server.LineBufferedSession):
     def __init__(self, socket):
         super(Session, self).__init__(socket)
         self.threads = collections.OrderedDict()
-        self._response_reader = ResponseReader(self)
         self._sequence_no = 1
         self._file_mapping = cui.get_variable(constants.ST_FILE_MAPPING).copy()
 
@@ -311,12 +278,8 @@ class Session(server.Session):
         self._sequence_no += 2
         return sequence_no
 
-    def handle(self):
-        responses = self._response_reader.read_responses()
-        if responses is None:
-            return
-        for response in responses:
-            self._dispatch(response)
+    def handle_line(self, line):
+        self._dispatch(Command.from_string(self._file_mapping, line))
 
     def _dispatch_thread_info(self, thread_info):
         if thread_info['id'] in self.threads:
