@@ -46,6 +46,9 @@ def parse_version_response(file_mapping, payload):
 def parse_thread_create(file_mapping, payload):
     return parse_object(file_mapping, et.fromstring(payload))
 
+def parse_thread_kill(file_mapping, payload):
+    return payload
+
 def parse_thread_suspend(file_mapping, payload):
     return [{'type':   'thread_suspend',
              'id':     thread.attrib['id'],
@@ -66,6 +69,7 @@ payload_factory_map = {
     constants.CMD_THREAD_CREATE: parse_thread_create,
     constants.CMD_THREAD_SUSPEND: parse_thread_suspend,
     constants.CMD_THREAD_RESUME: parse_thread_resume,
+    constants.CMD_THREAD_KILL: parse_thread_kill,
     constants.CMD_VERSION: parse_version_response,
     constants.CMD_GET_FRAME: parse_return,
     constants.CMD_GET_VAR: parse_return,

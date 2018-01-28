@@ -279,6 +279,8 @@ class Session(server.LineBufferedSession):
         return sequence_no
 
     def handle_line(self, line):
+        if cui.get_variable(constants.ST_DEBUG_LOG):
+            cui.message('=== Received response: \n%s' % (line,))
         self._dispatch(Command.from_string(self._file_mapping, line))
 
     def _dispatch_thread_info(self, thread_info):
@@ -298,6 +300,9 @@ class Session(server.LineBufferedSession):
             item = response.payload[0]
             if item['type'] == 'thread_info':
                 self._dispatch_thread_info(item)
+        elif response.command == constants.CMD_THREAD_KILL:
+            self.threads.pop(response.payload).close()
+            cui.message('Thread %s killed.' % response.payload)
         elif response.command == constants.CMD_THREAD_SUSPEND:
             for item in response.payload:
                 if item['type'] == 'thread_suspend':
