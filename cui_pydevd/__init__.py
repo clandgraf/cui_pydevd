@@ -86,8 +86,15 @@ class D_Thread(object):
         self.session.send_command(constants.CMD_THREAD_RESUME, self.id)
 
     def eval(self, frame, expr):
+        try:
+            compile(expr, '<string>', 'eval')
+        except:
+            method = constants.CMD_EXEC_EXPR
+        else:
+            method = constants.CMD_EVAL_EXPR
+
         self.evals.add(
-            self.session.send_command(constants.CMD_EVAL_EXPR,
+            self.session.send_command(method,
                                       "%(thread)s\t%(frame)s\tLOCAL\t%(expr)s\t0"
                                       % {'thread': self.id,
                                          'frame': frame.id,
@@ -96,7 +103,9 @@ class D_Thread(object):
     def on_eval(self, sequence_no, variables):
         if sequence_no in self.evals:
             self.evals.remove(sequence_no)
-            cui.exec_if_buffer_exists(lambda b: b.extend(*[v['value'] for v in variables]),
+            cui.exec_if_buffer_exists(lambda b: b.extend(*[v['value']
+                                                           for v in variables
+                                                           if v['vtype'] != 'NoneType']),
                                       buffers.EvalBuffer, self)
 
     def update_thread(self, thread_info):
@@ -133,8 +142,9 @@ class D_Thread(object):
         for frame in self.frames:
             if frame.pending == sequence_no:
                 frame.init_variables(variables)
-                cui.exec_if_buffer_exists(lambda b: b.set_frame(frame),
-                                          buffers.FrameBuffer, self)
+                for b in [buffers.EvalBuffer, buffers.FrameBuffer]:
+                    cui.exec_if_buffer_exists(lambda b: b.set_frame(frame), b, self)
+
 
     def update_variable(self, sequence_no, variables):
         for frame in self.frames:
