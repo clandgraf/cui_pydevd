@@ -8,8 +8,8 @@ import cui_source
 import json
 import os
 
-from cui.tools import server
-from cui.tools import file_mapping
+from cui_tools import server
+from cui.util import file_mapping
 from cui.util import find_index
 
 from cui_pydevd import buffers
@@ -511,7 +511,7 @@ def remove_breakpoint_in_current_file(path, line):
 @cui.init_func
 def initialize():
     # Initialize Debug Server
-    srv = server.Server(Session, constants.ST_HOST, constants.ST_PORT)
+    srv = server.Server(Session, constants.ST_HOST, constants.ST_PORT, env=cui)
     cui.set_variable(constants.ST_SERVER, srv)
 
     # Initialize Breakpoints
