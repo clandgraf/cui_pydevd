@@ -280,11 +280,11 @@ class Session(server.LineBufferedSession):
 
     def send_command(self, command, argument=''):
         sequence_no = self._sequence_no
-        payload = ('%s\t%s\t%s\n'
+        payload = ('%s\t%s\t%s'
                    % (command, sequence_no, argument))
         if cui.get_variable(constants.ST_DEBUG_LOG):
             cui.message('=== Sending command: \n%s' % (payload,))
-        self.send_all(payload.encode('utf-8'))
+        self.send_line(payload)
         self._sequence_no += 2
         return sequence_no
 
@@ -505,7 +505,7 @@ def remove_breakpoint_in_current_file(path, line):
     file from the debugger. The buffer must have a file association,
     i.e. a property ``_file_path`` must be defined for it.
     """
-    return remove_breakpoint(session, path, line)
+    return remove_breakpoint(path, line)
 
 
 @cui.init_func
