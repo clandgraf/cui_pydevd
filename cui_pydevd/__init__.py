@@ -338,6 +338,7 @@ class Session(server.LineBufferedSession):
         for thread in self.threads.values():
             thread.close()
         cui.kill_buffer(buffers.ThreadBuffer, self)
+        cui.kill_buffer(buffers.BreakpointBuffer, self)
         cui.run_hook(constants.ST_ON_KILL_SESSION)
         super(Session, self).close()
 
